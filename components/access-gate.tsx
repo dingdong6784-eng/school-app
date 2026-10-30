@@ -2,104 +2,78 @@
 
 import { FormEvent, useState } from 'react'
 import { ArrowRight, Heart, LockKeyhole, ShieldCheck, Sparkles } from 'lucide-react'
+import { authClient } from '@/lib/auth/client'
 
-const MAX_CODE_LENGTH = 12
-
-export function AccessGate({
-  onUnlock,
-  checking,
-}: {
-  onUnlock: (passcode: string) => Promise<boolean>
-  checking: boolean
-}) {
-  const [passcode, setPasscode] = useState('')
+export function AccessGate({ invitationPending }: { invitationPending: boolean }) {
+  const [mode, setMode] = useState<'sign-in' | 'sign-up'>('sign-in')
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
   const [error, setError] = useState('')
-  const [submitting, setSubmitting] = useState(false)
+  const [busy, setBusy] = useState(false)
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     setError('')
-    if (passcode.length !== MAX_CODE_LENGTH) {
-      setError('Enter all 12 digits to unlock our lounge.')
+    const normalizedEmail = email.trim().toLowerCase()
+    if (mode === 'sign-up' && password !== confirmPassword) {
+      setError('Those passwords do not match.')
+      return
+    }
+    if (password.length < 8) {
+      setError('Use a password with at least 8 characters.')
       return
     }
 
-    setSubmitting(true)
+    setBusy(true)
     try {
-      const unlocked = await onUnlock(passcode)
-      if (!unlocked) {
-        setError('That code doesn’t look right. Try again.')
-        setPasscode('')
+      const result = mode === 'sign-up'
+        ? await authClient.signUp.email({ email: normalizedEmail, password, name: 'Lounge member' })
+        : await authClient.signIn.email({ email: normalizedEmail, password })
+      if (result.error) {
+        setError(mode === 'sign-up' ? 'That account could not be created. Check the email and try again.' : 'That email and password did not match.')
+        return
       }
+      window.location.reload()
     } catch {
-      setError('The lounge couldn’t be reached. Please try again.')
+      setError('The account service could not be reached. Please try again.')
     } finally {
-      setSubmitting(false)
+      setBusy(false)
     }
-  }
-
-  function pressDigit(digit: string) {
-    setError('')
-    setPasscode((current) => (current.length < MAX_CODE_LENGTH ? current + digit : current))
-  }
-
-  if (checking) {
-    return (
-      <div className="gate-backdrop" aria-live="polite">
-        <div className="gate-card gate-checking">
-          <span className="gate-mark"><Heart fill="currentColor" /></span>
-          <p className="eyebrow">Z &amp; K · PRIVATE SPACE</p>
-          <h1>One little moment…</h1>
-          <p className="muted-copy">Making sure it’s really you.</p>
-          <span className="loading-line" aria-hidden="true" />
-        </div>
-      </div>
-    )
   }
 
   return (
     <div className="gate-backdrop">
-      <div className="gate-card" role="dialog" aria-modal="true" aria-labelledby="gate-title">
+      <section className="gate-card account-card" aria-labelledby="gate-title">
         <div className="gate-mark"><Heart fill="currentColor" /></div>
         <p className="eyebrow">A LITTLE PLACE FOR TWO</p>
         <h1 id="gate-title">Welcome to our<br /><span>private little world.</span></h1>
         <p className="gate-copy">A movie, a match, and a little time together.</p>
-        <form onSubmit={handleSubmit} className="gate-form">
-          <label className="sr-only" htmlFor="lounge-passcode">12-digit lounge passcode</label>
-          <div className={`passcode-display ${error ? 'passcode-error' : ''}`}>
-            <LockKeyhole size={15} aria-hidden="true" />
-            <input
-              id="lounge-passcode"
-              type="password"
-              inputMode="numeric"
-              autoComplete="off"
-              value={passcode}
-              readOnly
-              aria-describedby={error ? 'passcode-error' : 'passcode-hint'}
-              placeholder="Enter our passcode"
-            />
-            <span className="passcode-count">{passcode.length}/12</span>
-          </div>
-          <p id="passcode-hint" className="sr-only">Use the keypad to enter all 12 digits.</p>
-          <div className="gate-keypad" aria-label="Passcode keypad">
-            {['1', '2', '3', '4', '5', '6', '7', '8', '9', 'clear', '0', 'back'].map((key) => {
-              if (key === 'clear') {
-                return <button key={key} type="button" className="keypad-utility" onClick={() => { setPasscode(''); setError('') }} aria-label="Clear passcode">C</button>
-              }
-              if (key === 'back') {
-                return <button key={key} type="button" className="keypad-utility" onClick={() => { setPasscode((current) => current.slice(0, -1)); setError('') }} aria-label="Delete last digit"><span className="backspace-symbol" aria-hidden="true">⌫</span></button>
-              }
-              return <button key={key} type="button" className="keypad-digit" onClick={() => pressDigit(key)} disabled={passcode.length >= MAX_CODE_LENGTH || submitting}>{key}</button>
-            })}
-          </div>
-          {error ? <p id="passcode-error" className="gate-error" role="alert">{error}</p> : null}
-          <button className="gate-submit" type="submit" disabled={submitting}>
-            <span>{submitting ? 'Checking…' : 'Enter our lounge'}</span>
-            {submitting ? <ShieldCheck size={16} /> : <ArrowRight size={16} />}
+        {invitationPending ? <p className="account-invite-note"><Heart size={13} /> You can accept your room invitation after signing in.</p> : null}
+
+        <div className="account-mode-tabs" role="tablist" aria-label="Account access">
+          <button type="button" role="tab" aria-selected={mode === 'sign-in'} className={mode === 'sign-in' ? 'account-mode-active' : ''} onClick={() => { setMode('sign-in'); setError('') }}>Sign in</button>
+          <button type="button" role="tab" aria-selected={mode === 'sign-up'} className={mode === 'sign-up' ? 'account-mode-active' : ''} onClick={() => { setMode('sign-up'); setError('') }}>Create account</button>
+        </div>
+
+        <form onSubmit={handleSubmit} className="account-form">
+          <label htmlFor="account-email">Email address</label>
+          <input id="account-email" type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@example.com" required maxLength={254} />
+          <label htmlFor="account-password">Password</label>
+          <input id="account-password" type="password" autoComplete={mode === 'sign-up' ? 'new-password' : 'current-password'} value={password} onChange={(event) => setPassword(event.target.value)} placeholder="At least 8 characters" required minLength={8} maxLength={128} />
+          {mode === 'sign-up' ? <>
+            <label htmlFor="account-password-confirm">Confirm password</label>
+            <input id="account-password-confirm" type="password" autoComplete="new-password" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} placeholder="Type it once more" required minLength={8} maxLength={128} />
+          </> : null}
+          {error ? <p className="account-error" role="alert">{error}</p> : null}
+          <button className="gate-submit" type="submit" disabled={busy}>
+            <span>{busy ? 'One moment…' : mode === 'sign-in' ? 'Sign in to the lounge' : 'Create your account'}</span>
+            {busy ? <ShieldCheck size={16} /> : <ArrowRight size={16} />}
           </button>
         </form>
-        <div className="gate-footnote"><Sparkles size={13} /><span>Just for us, always.</span></div>
-      </div>
+        <div className="gate-footnote"><LockKeyhole size={12} /><span>Your own account. Just the two of you in the room.</span></div>
+        <div className="account-sparkle" aria-hidden="true"><Sparkles size={12} /></div>
+      </section>
     </div>
   )
 }

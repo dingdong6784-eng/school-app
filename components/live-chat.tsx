@@ -8,30 +8,22 @@ import { listLoungeMessages, reactToLoungeMessage, sendLoungeMessage, type Loung
 
 type ChatMessage = Awaited<ReturnType<typeof listLoungeMessages>>[number]
 const reactions: LoungeReaction[] = ['❤️', '🍿', '🎮', '😮', '😂']
-const sampleMessages: ChatMessage[] = [
-  { id: 'sample-1', author: 'Her', body: 'I saved the coziest spot for us. Movie or games first?', reaction: '❤️', createdAt: new Date(Date.now() - 1000 * 60 * 18).toISOString() },
-  { id: 'sample-2', author: 'Him', body: 'Movie first. Popcorn is already on the way.', reaction: '🍿', createdAt: new Date(Date.now() - 1000 * 60 * 15).toISOString() },
-  { id: 'sample-3', author: 'Her', body: 'Perfect. I’ll pick the first game after.', reaction: null, createdAt: new Date(Date.now() - 1000 * 60 * 12).toISOString() },
-]
 
-export function LiveChatDrawer({ open, onClose, defaultAuthor }: { open: boolean; onClose: () => void; defaultAuthor: LoungeAuthor }) {
+export function LiveChatDrawer({ open, onClose, roomId, userId, currentAuthor }: { open: boolean; onClose: () => void; roomId: string; userId: string; currentAuthor: LoungeAuthor }) {
   const { mutate } = useSWRConfig()
-  const { data, error, isLoading } = useSWR(open ? 'zk-lounge-chat' : null, listLoungeMessages, {
+  const chatKey = ['room-chat', userId, roomId]
+  const { data, error, isLoading } = useSWR(open ? chatKey : null, () => listLoungeMessages(roomId), {
     refreshInterval: 2500,
     revalidateOnFocus: true,
     shouldRetryOnError: false,
   })
-  const [author, setAuthor] = useState<LoungeAuthor>(defaultAuthor)
   const [draft, setDraft] = useState('')
   const [attachmentName, setAttachmentName] = useState('')
   const [sending, setSending] = useState(false)
   const [notice, setNotice] = useState('')
   const transcriptRef = useRef<HTMLDivElement>(null)
-  const messages = data?.length ? data : sampleMessages
-
-  useEffect(() => {
-    setAuthor(defaultAuthor)
-  }, [defaultAuthor])
+  const messages = data ?? []
+  const authorLabel = currentAuthor === 'Him' ? 'Z' : 'A'
 
   useEffect(() => {
     if (!open) return
@@ -48,10 +40,10 @@ export function LiveChatDrawer({ open, onClose, defaultAuthor }: { open: boolean
     setSending(true)
     setNotice('')
     try {
-      await sendLoungeMessage(author, body)
+      await sendLoungeMessage(roomId, body)
       setDraft('')
       setAttachmentName('')
-      await mutate('zk-lounge-chat')
+      await mutate(chatKey)
     } catch {
       setNotice('Couldn’t send that just now. Check your connection and try again.')
     } finally {
@@ -67,13 +59,9 @@ export function LiveChatDrawer({ open, onClose, defaultAuthor }: { open: boolean
   }
 
   async function addReaction(message: ChatMessage, reaction: LoungeReaction) {
-    if (message.id.startsWith('sample-')) {
-      setNotice('Send your first message to start the shared chat history.')
-      return
-    }
     try {
-      await reactToLoungeMessage(message.id, reaction)
-      await mutate('zk-lounge-chat')
+      await reactToLoungeMessage(roomId, message.id, reaction)
+      await mutate(chatKey)
     } catch {
       setNotice('That reaction couldn’t be saved. Try again in a moment.')
     }
@@ -94,22 +82,23 @@ export function LiveChatDrawer({ open, onClose, defaultAuthor }: { open: boolean
     <div className="chat-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}>
       <aside className="chat-drawer" id="live-chat-drawer" role="dialog" aria-modal="true" aria-labelledby="chat-title">
         <header className="chat-header">
-          <div className="chat-header-title"><span className="chat-header-icon"><MessageCircle size={16} /></span><div><p className="eyebrow">OUR PRIVATE ROOM</p><h2 id="chat-title">Little live chat</h2></div></div>
+          <div className="chat-header-title"><span className="chat-header-icon"><MessageCircle size={16} /></span><div><p className="eyebrow">YOUR PRIVATE ROOM</p><h2 id="chat-title">Little live chat</h2></div></div>
           <div className="chat-header-actions"><span className="chat-online"><i /> Here together</span><button className="chat-close" onClick={onClose} aria-label="Close live chat"><X size={17} /></button></div>
         </header>
-        <div className="chat-safety-note"><ShieldCheck size={13} /><span>Just the two of us, on our own little channel.</span><span className="chat-refresh-indicator"><i /> LIVE</span></div>
-        <div className="chat-date-marker"><span /> TODAY, IN OUR LITTLE WORLD <span /></div>
+        <div className="chat-safety-note"><ShieldCheck size={13} /><span>Messages are shared only with the two room members.</span><span className="chat-refresh-indicator"><i /> LIVE</span></div>
+        <div className="chat-date-marker"><span /> OUR ROOM <span /></div>
         <div className="chat-transcript" ref={transcriptRef} aria-live="polite" aria-relevant="additions text">
-          {isLoading && !data ? <div className="chat-loading"><LoaderCircle size={16} /> Opening our chat…</div> : null}
+          {isLoading && !data ? <div className="chat-loading"><LoaderCircle size={16} /> Opening your chat…</div> : null}
           {messages.map((message) => {
-            const own = message.author === author
+            const author = message.author === 'Her' ? 'A' : 'Z'
+            const own = message.author === currentAuthor
             return (
               <article className={`chat-message ${own ? 'chat-message-own' : ''}`} key={message.id}>
-                <span className={`chat-avatar ${message.author === 'Her' ? 'chat-avatar-her' : ''}`}>{message.author === 'Her' ? 'K' : 'Z'}</span>
+                <span className={`chat-avatar ${author === 'A' ? 'chat-avatar-her' : ''}`}>{author}</span>
                 <div className="chat-message-column">
-                  <div className="chat-message-meta"><strong>{message.author}</strong><time dateTime={message.createdAt}>{new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' }).format(new Date(message.createdAt))}</time></div>
-                  <p className={`chat-bubble ${message.author === 'Her' ? 'bubble-her' : 'bubble-him'}`}>{message.body}</p>
-                  <div className="chat-reactions" aria-label={`React to ${message.author}’s message`}>
+                  <div className="chat-message-meta"><strong>Seat {author}</strong><time dateTime={message.createdAt}>{new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' }).format(new Date(message.createdAt))}</time></div>
+                  <p className={`chat-bubble ${author === 'A' ? 'bubble-her' : 'bubble-him'}`}>{message.body}</p>
+                  <div className="chat-reactions" aria-label={`React to seat ${author}’s message`}>
                     {reactions.map((reaction) => <button key={reaction} className={message.reaction === reaction ? 'reaction-picked' : ''} onClick={() => addReaction(message, reaction)} aria-label={`React with ${reaction}`} aria-pressed={message.reaction === reaction}>{reaction}</button>)}
                     {message.reaction ? <span className="reaction-current">{message.reaction}</span> : null}
                   </div>
@@ -117,11 +106,11 @@ export function LiveChatDrawer({ open, onClose, defaultAuthor }: { open: boolean
               </article>
             )
           })}
-          {error ? <div className="chat-empty-state"><Heart size={17} /><p>Sample messages are here while the chat reconnects.</p></div> : null}
-          {data?.length === 0 && !error ? <div className="chat-first-note"><Heart size={13} /> Our conversation starts here.</div> : null}
+          {error ? <div className="chat-empty-state"><Heart size={17} /><p>Your chat could not reconnect. Close and reopen it to retry.</p></div> : null}
+          {data?.length === 0 && !error ? <div className="chat-first-note"><Heart size={13} /> Your conversation starts here.</div> : null}
         </div>
         <div className="chat-composer-area">
-          <div className="chat-profile-row"><span>Send as</span>{(['Him', 'Her'] as LoungeAuthor[]).map((person) => <button key={person} className={author === person ? `chat-profile-active ${person === 'Her' ? 'chat-profile-her' : ''}` : ''} onClick={() => setAuthor(person)}><i className={person === 'Her' ? 'chat-avatar-her' : ''}>{person === 'Him' ? 'Z' : 'K'}</i>{person}</button>)}</div>
+          <div className="chat-profile-row"><span>Sending as</span><button className={`chat-profile-active ${currentAuthor === 'Her' ? 'chat-profile-her' : ''}`} type="button"><i className={currentAuthor === 'Her' ? 'chat-avatar-her' : ''}>{authorLabel}</i>Seat {authorLabel}</button></div>
           {notice ? <p className="chat-notice" role="status">{notice}<button onClick={() => setNotice('')} aria-label="Dismiss notice"><X size={12} /></button></p> : null}
           {attachmentName ? <div className="attachment-preview"><ImagePlus size={13} /><span>{attachmentName}</span><small>preview only</small><button onClick={() => setAttachmentName('')} aria-label="Remove attachment preview"><X size={12} /></button></div> : null}
           <form className="chat-composer" onSubmit={sendMessage}>
@@ -132,7 +121,7 @@ export function LiveChatDrawer({ open, onClose, defaultAuthor }: { open: boolean
               <button className="chat-send-button" type="submit" disabled={!draft.trim() || sending} aria-label="Send message">{sending ? <LoaderCircle size={15} className="spin" /> : <Send size={15} />}</button>
             </div>
           </form>
-          <p className="chat-endnote"><Check size={11} /> Messages refresh live between your devices.</p>
+          <p className="chat-endnote"><Check size={11} /> Messages refresh across your accounts.</p>
         </div>
       </aside>
     </div>

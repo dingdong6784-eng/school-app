@@ -1,462 +1,233 @@
 'use client'
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useState } from 'react'
+import useSWR from 'swr'
 import { Chess, type Square } from 'chess.js'
-import { ArrowDown, ArrowLeftRight, ArrowRight, BookOpen, Check, ChevronDown, CircleHelp, Clock3, Coins, Crown, Dices, Gamepad2, Heart, Layers, Lightbulb, RotateCcw, Sparkles, Trophy, Users, X } from 'lucide-react'
+import { CircleHelp, Gamepad2, LoaderCircle, RotateCcw, Sparkles, Users } from 'lucide-react'
+import { getGameView, makeGameMove, resetGame } from '@/app/actions/rooms'
+import type { CardSuit, GameAction, GameId, GameViewState, PlayerSeat, UnoCard, UnoColor } from '@/lib/arcade-types'
+import { otherSeat } from '@/lib/arcade-types'
 
-type GameId = 'uno' | 'chess' | 'speed' | 'crazy' | 'connect' | 'tic' | 'memory'
-const gameOptions: { id: GameId; name: string; kicker: string; icon: string }[] = [
-  { id: 'uno', name: 'UNO', kicker: 'A little chaos', icon: 'U' },
-  { id: 'chess', name: 'Chess', kicker: 'Make your move', icon: '♞' },
-  { id: 'speed', name: 'Speed', kicker: 'Fast hands', icon: '↯' },
-  { id: 'crazy', name: 'Crazy Eights', kicker: 'Classic cards', icon: '8' },
-  { id: 'connect', name: 'Connect Four', kicker: 'Four in a row', icon: '●' },
-  { id: 'tic', name: 'Tic-Tac-Toe', kicker: 'Glow edition', icon: '×' },
-  { id: 'memory', name: 'Memory Match', kicker: 'Made for two', icon: '✦' },
+type GameOption = { id: GameId; name: string; kicker: string; icon: string; rules: string }
+const gameOptions: GameOption[] = [
+  { id: 'uno', name: 'UNO', kicker: 'A little chaos', icon: 'U', rules: 'Match color or number. Special cards skip, reverse, or make the other seat draw. First to empty a hand wins.' },
+  { id: 'chess', name: 'Chess', kicker: 'Make your move', icon: '♞', rules: 'White moves first. Select a piece, then a highlighted square. Checkmate wins; drawn positions end in a draw.' },
+  { id: 'speed', name: 'Speed', kicker: 'Fast hands', icon: '↯', rules: 'Both players can play on either center pile. Play one rank above or below the top card; Aces wrap around.' },
+  { id: 'crazy', name: 'Crazy Eights', kicker: 'Classic cards', icon: '8', rules: 'Match suit or rank. Eights are wild and choose a new suit. First to empty a hand wins.' },
+  { id: 'connect', name: 'Connect Four', kicker: 'Four in a row', icon: '●', rules: 'Take turns dropping a disc into a column. Connect four horizontally, vertically, or diagonally to win.' },
+  { id: 'tic', name: 'Tic-Tac-Toe', kicker: 'Glow edition', icon: '×', rules: 'Take turns marking a square. Connect three in a row, column, or diagonal to win.' },
+  { id: 'memory', name: 'Memory Match', kicker: 'Made for two', icon: '✦', rules: 'Reveal two cards on your turn. Matching pairs score and let you play again; most pairs wins.' },
 ]
+const suitGlyph: Record<CardSuit, string> = { hearts: '♥', diamonds: '♦', clubs: '♣', spades: '♠' }
+const chessSymbols: Record<string, string> = { wk: '♔', wq: '♕', wr: '♖', wb: '♗', wn: '♘', wp: '♙', bk: '♚', bq: '♛', br: '♜', bb: '♝', bn: '♞', bp: '♟' }
+const chessFiles = 'abcdefgh'
 
-const rules: Record<GameId, { intro: string; steps: string[]; controls: string }> = {
-  uno: { intro: 'A familiar card game, played face-to-face on one screen.', steps: ['Each player starts with seven cards. Match the discard pile by color or number.', 'Tap Draw if you have no match, or choose a matching card from your hand.', 'Skip and Reverse skip the other player in this two-player version. Draw Two and Wild Draw Four make them draw before your next turn.', 'The first person to empty their hand wins. Keep an eye on that last card!'], controls: 'Tap a card to play it, or use Draw a card. The active turn is shown above the table.' },
-  chess: { intro: 'A quiet, classic game of tactics. Checkmate wins.', steps: ['White moves first. Players alternate moving one piece at a time.', 'Tap a piece to see its legal destinations, then tap a highlighted square.', 'The king may not move into check. Captured pieces are shown beside the board.', 'Checkmate wins. Stalemate and other drawn positions end in a draw.'], controls: 'Select a piece, then a highlighted square. Pawns automatically promote to a queen.' },
-  speed: { intro: 'A quick two-player card race. Both players can play whenever they spot a move.', steps: ['Each player has a five-card hand and their own center stack.', 'Play a card one rank higher, one rank lower, or the same rank as either center card.', 'Draw back up to five cards after each play. Aces wrap around from King to Two.', 'The first person to clear their hand wins. If neither can move, use the reset piles button.'], controls: 'Tap any playable card in either hand. This is a pass-and-play table, so take turns at the same screen.' },
-  crazy: { intro: 'A low-stakes classic: shed your cards before the other player does.', steps: ['Each player receives five cards. Match the top card by suit or rank.', 'An Eight can be played on anything. Choose the suit you want next.', 'If you cannot play, draw one card. The turn passes to the other player.', 'First to empty their hand wins.'], controls: 'Tap a playable card. Choose a suit after playing an Eight, or Draw a card to pass.' },
-  connect: { intro: 'Take turns dropping discs. Four connected discs wins.', steps: ['Players alternate dropping a disc into one of seven columns.', 'Discs fall to the lowest open space in a column.', 'Connect four horizontally, vertically, or diagonally to win.', 'If all 42 spaces fill with no four in a row, it is a draw.'], controls: 'Choose a column by tapping its arrow above the board.' },
-  tic: { intro: 'A tiny classic with a little glow around the edges.', steps: ['Players take turns claiming one of the nine squares.', 'Connect three symbols horizontally, vertically, or diagonally to win.', 'If all squares are filled before someone connects three, it is a draw.', 'New round resets the board. The starting player alternates.'], controls: 'Tap an empty square to place your symbol.' },
-  memory: { intro: 'Turn over two cards at a time and remember where each pair lives.', steps: ['Take turns revealing two cards.', 'A matching pair stays face-up and earns a point.', 'If they do not match, both cards turn back over and the other person goes.', 'The person with the most pairs when the board is clear wins.'], controls: 'Tap two cards on your turn. Matches stay visible.' },
+function seatName(seat: PlayerSeat) {
+  return seat === 'Z' ? 'Z' : 'A'
 }
 
-function HowToPlay({ game }: { game: GameId }) {
-  const [open, setOpen] = useState(false)
-  const details = rules[game]
-  return (
-    <>
-      <button className="howto-trigger" onClick={() => setOpen(true)}><BookOpen size={14} /> How to play</button>
-      {open ? <div className="rules-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setOpen(false) }}>
-        <section className="rules-dialog" role="dialog" aria-modal="true" aria-labelledby={`rules-${game}`}>
-          <button className="rules-close" onClick={() => setOpen(false)} aria-label="Close rules"><X size={16} /></button>
-          <span className="rules-icon"><CircleHelp size={17} /></span>
-          <p className="eyebrow">THE HOUSE RULES</p>
-          <h2 id={`rules-${game}`}>How to play <em>{gameOptions.find((item) => item.id === game)?.name}</em></h2>
-          <p className="rules-intro">{details.intro}</p>
-          <ol className="rules-list">{details.steps.map((step, index) => <li key={step}><span>{String(index + 1).padStart(2, '0')}</span><p>{step}</p></li>)}</ol>
-          <div className="rules-controls"><Lightbulb size={14} /><p><strong>Controls</strong>{details.controls}</p></div>
-          <button className="rules-done" onClick={() => setOpen(false)}>Got it <Check size={14} /></button>
-        </section>
-      </div> : null}
-    </>
-  )
+function displayWinner(winner: GameViewState['winner']) {
+  return winner === 'draw' ? 'A draw. Nice game.' : winner ? `${seatName(winner)} wins this round.` : ''
 }
 
-export function GamesArcade() {
+function unoCardLabel(card: UnoCard) {
+  if (card.color === 'wild') return card.value === 'draw4' ? '+4' : 'WILD'
+  if (card.value === 'skip') return 'SKIP'
+  if (card.value === 'reverse') return 'REV'
+  if (card.value === 'draw2') return '+2'
+  return card.value
+}
+
+function unoCardClass(color: UnoColor | 'wild') {
+  return color === 'wild' ? '' : `${color}-suit`
+}
+
+function cardRankLabel(rank: number) {
+  if (rank === 1) return 'A'
+  if (rank === 11) return 'J'
+  if (rank === 12) return 'Q'
+  if (rank === 13) return 'K'
+  return String(rank)
+}
+
+function classicRankLabel(rank: string) {
+  return rank === '8' ? '8' : rank
+}
+
+export function GamesArcade({ roomId, userId, playerSeat }: { roomId: string; userId: string; playerSeat: PlayerSeat }) {
   const [activeGame, setActiveGame] = useState<GameId>('uno')
+  const partner = otherSeat(playerSeat)
   return (
-    <section className="arcade-page">
-      <div className="section-heading-row arcade-heading">
-        <div><p className="eyebrow"><Sparkles size={13} /> THE ARCADE</p><h1>Play a little <span>longer.</span></h1><p className="muted-copy">A tiny tournament. Winner gets to pick the next movie.</p></div>
-        <div className="arcade-score"><Trophy size={15} /><div><strong>Just us, playing</strong><span>2 players · 7 games</span></div></div>
+    <section className="live-game-shell">
+      <div className="live-game-heading">
+        <div><p className="eyebrow"><Sparkles size={13} /> THE ARCADE</p><h1>Play a little <span>longer.</span></h1><p className="muted-copy">Your games stay in sync across both accounts.</p></div>
+        <div className="live-game-presence"><Users size={14} /><span>You&apos;re {playerSeat}; your partner is {partner}.</span></div>
       </div>
-      <div className="game-picker" role="tablist" aria-label="Choose a game">
-        {gameOptions.map((game) => <button key={game.id} role="tab" aria-selected={activeGame === game.id} className={activeGame === game.id ? 'game-picker-active' : ''} onClick={() => setActiveGame(game.id)}><span className={`game-picker-icon game-icon-${game.id}`}>{game.icon}</span><span className="game-picker-label"><strong>{game.name}</strong><small>{game.kicker}</small></span></button>)}
+      <div className="live-game-picker" role="tablist" aria-label="Choose a game">
+        {gameOptions.map((game) => <button key={game.id} type="button" role="tab" aria-selected={activeGame === game.id} onClick={() => setActiveGame(game.id)}><span aria-hidden="true">{game.icon}</span><span><strong>{game.name}</strong><small>{game.kicker}</small></span></button>)}
       </div>
-      <div className="arcade-table">
-        {activeGame === 'uno' ? <UnoGame /> : null}
-        {activeGame === 'chess' ? <ChessGame /> : null}
-        {activeGame === 'speed' || activeGame === 'crazy' ? <ClassicCards game={activeGame} onChange={setActiveGame} /> : null}
-        {activeGame === 'connect' ? <ConnectFour /> : null}
-        {activeGame === 'tic' ? <TicTacToe /> : null}
-        {activeGame === 'memory' ? <MemoryMatch /> : null}
-      </div>
-      <div className="arcade-footer-note"><Heart size={13} /> No leaderboard. No pressure. Just a rematch.</div>
+      <GamePanel key={activeGame} gameId={activeGame} roomId={roomId} userId={userId} playerSeat={playerSeat} />
+      <div className="arcade-footer-note"><Gamepad2 size={13} /> No leaderboard. No pressure. Just a rematch.</div>
     </section>
   )
 }
 
-type UnoColor = 'red' | 'blue' | 'green' | 'yellow'
-type UnoPlayer = 'Him' | 'Her'
-type UnoCard = { id: number; color: UnoColor | 'wild'; value: string }
-type UnoState = { hands: Record<UnoPlayer, UnoCard[]>; deck: UnoCard[]; discard: UnoCard[]; color: UnoColor; turn: UnoPlayer; winner: UnoPlayer | null; lastAction: string }
-const unoColors: UnoColor[] = ['red', 'blue', 'green', 'yellow']
-const colorHex: Record<UnoColor, string> = { red: '#d86c74', blue: '#668dac', green: '#6caa88', yellow: '#d9b768' }
+function GamePanel({ gameId, roomId, userId, playerSeat }: { gameId: GameId; roomId: string; userId: string; playerSeat: PlayerSeat }) {
+  const option = gameOptions.find((game) => game.id === gameId)!
+  const key = ['room-game', userId, roomId, gameId]
+  const { data, error, isLoading, mutate } = useSWR(
+    key,
+    () => getGameView(roomId, gameId),
+    { refreshInterval: 1400, revalidateOnFocus: true, shouldRetryOnError: false },
+  )
+  const [notice, setNotice] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [selectedSquare, setSelectedSquare] = useState<Square | null>(null)
 
-function shuffled<T>(cards: T[]) {
-  const copy = [...cards]
-  for (let index = copy.length - 1; index > 0; index -= 1) {
-    const swap = Math.floor(Math.random() * (index + 1))
-    ;[copy[index], copy[swap]] = [copy[swap], copy[index]]
-  }
-  return copy
-}
-
-function createUno(): UnoState {
-  let nextId = 0
-  const deck: UnoCard[] = []
-  for (const color of unoColors) {
-    deck.push({ id: nextId++, color, value: '0' })
-    for (let count = 0; count < 2; count += 1) {
-      for (let number = 1; number <= 9; number += 1) deck.push({ id: nextId++, color, value: String(number) })
-      for (const value of ['skip', 'reverse', 'draw2']) deck.push({ id: nextId++, color, value })
+  async function perform(action: GameAction) {
+    setNotice('')
+    setBusy(true)
+    try {
+      const next = await makeGameMove(roomId, gameId, action)
+      await mutate(next, false)
+      if (gameId === 'memory' && action.type === 'flip' && (next.state as Extract<GameViewState, { cards: unknown[] }>).revealed.length === 2) {
+        window.setTimeout(async () => {
+          try {
+            const after = await makeGameMove(roomId, 'memory', { type: 'finish-mismatch' })
+            await mutate(after, false)
+          } catch {
+            await mutate()
+          }
+        }, 900)
+      }
+    } catch {
+      setNotice('That move could not be saved. Refreshing the shared table…')
+      await mutate()
+    } finally {
+      setBusy(false)
     }
   }
-  for (let count = 0; count < 4; count += 1) {
-    deck.push({ id: nextId++, color: 'wild', value: 'wild' }, { id: nextId++, color: 'wild', value: 'draw4' })
+
+  async function newGame() {
+    setBusy(true)
+    setNotice('')
+    try {
+      await mutate(await resetGame(roomId, gameId), false)
+      setSelectedSquare(null)
+    } catch {
+      setNotice('A new round could not be started. Try again.')
+    } finally {
+      setBusy(false)
+    }
   }
-  const pile = shuffled(deck)
-  const hands = { Him: pile.splice(0, 7), Her: pile.splice(0, 7) }
-  let first = pile.pop()!
-  while (first.color === 'wild') { pile.unshift(first); first = pile.pop()! }
-  return { hands, deck: pile, discard: [first], color: first.color as UnoColor, turn: 'Him', winner: null, lastAction: 'Him starts. Match the color or number.' }
+
+  if (isLoading || !data) return <div className="live-game-card live-game-loading"><LoaderCircle className="spin" size={16} /> Opening the shared table…</div>
+  if (error) return <div className="live-game-card live-game-loading" role="alert">This room&apos;s game table could not be loaded.</div>
+
+  const state = data.state
+  const myTurn = state.turn === playerSeat
+  const status = state.winner ? displayWinner(state.winner) : gameId === 'speed' ? 'Both players can play a legal card at any time.' : myTurn ? 'Your move.' : `${seatName(state.turn)} to move.`
+
+  return (
+    <section className="live-game-card" aria-label={`${option.name} shared game`}>
+      <div className="live-game-toolbar">
+        <div><h2>{option.name}</h2><p>{option.rules}</p></div>
+        <div className="live-game-toolbar-actions"><button type="button" onClick={() => setNotice(notice ? '' : option.rules)} aria-label={`How to play ${option.name}`}><CircleHelp size={13} /> Rules</button><button type="button" onClick={newGame} disabled={busy}><RotateCcw size={13} /> New game</button></div>
+      </div>
+      <div className="live-game-status"><span><i />{status}</span><small>{state.lastAction}</small></div>
+      {notice ? <p className="live-game-notice" role="status">{notice}</p> : null}
+      {gameId === 'uno' ? <UnoTable state={state as Extract<GameViewState, { hand: UnoCard[]; color: UnoColor }>} playerSeat={playerSeat} busy={busy} onAction={perform} /> : null}
+      {gameId === 'crazy' ? <CrazyTable state={state as Extract<GameViewState, { activeSuit: CardSuit }>} playerSeat={playerSeat} busy={busy} onAction={perform} /> : null}
+      {gameId === 'speed' ? <SpeedTable state={state as Extract<GameViewState, { center: unknown[] }>} playerSeat={playerSeat} busy={busy} onAction={perform} /> : null}
+      {gameId === 'chess' ? <ChessTable state={state as Extract<GameViewState, { fen: string }>} playerSeat={playerSeat} selected={selectedSquare} setSelected={setSelectedSquare} busy={busy} onAction={perform} /> : null}
+      {gameId === 'connect' ? <ConnectTable state={state as Extract<GameViewState, { board: Array<PlayerSeat | null> }>} playerSeat={playerSeat} busy={busy} onAction={perform} /> : null}
+      {gameId === 'tic' ? <TicTable state={state as Extract<GameViewState, { marks: Record<PlayerSeat, 'X' | 'O'> }>} playerSeat={playerSeat} busy={busy} onAction={perform} /> : null}
+      {gameId === 'memory' ? <MemoryTable state={state as Extract<GameViewState, { cards: unknown[] }>} playerSeat={playerSeat} busy={busy} onAction={perform} /> : null}
+    </section>
+  )
 }
 
-function UnoCardFace({ card, onClick, disabled }: { card: UnoCard; onClick?: () => void; disabled?: boolean }) {
-  return <button type="button" className={`uno-card ${card.color === 'wild' ? 'uno-card-wild' : ''} ${card.color !== 'wild' ? `uno-${card.color}` : ''}`} onClick={onClick} disabled={disabled} aria-label={`${card.color} ${card.value}`}>
-    {card.color === 'wild' ? <span className="uno-wild-mark"><i /><i /><i /><i /></span> : null}
-    <span className="uno-card-value">{card.value === 'skip' ? '⊘' : card.value === 'reverse' ? '↻' : card.value === 'draw2' ? '+2' : card.value === 'draw4' ? '+4' : card.value === 'wild' ? '✦' : card.value}</span>
-    <small>{card.value === 'draw2' ? 'DRAW TWO' : card.value === 'draw4' ? 'WILD +4' : card.value.toUpperCase()}</small>
-  </button>
-}
-
-function UnoGame() {
-  const [state, setState] = useState<UnoState>(() => createUno())
-  const activePlayer = state.turn
-  const otherPlayer: UnoPlayer = activePlayer === 'Him' ? 'Her' : 'Him'
-  const topCard = state.discard[state.discard.length - 1]
-
-  function playCard(player: UnoPlayer, card: UnoCard) {
-    setState((current) => {
-      if (current.winner || current.turn !== player) return current
-      const top = current.discard[current.discard.length - 1]
-      if (card.color !== 'wild' && card.color !== current.color && card.value !== top.value) return { ...current, lastAction: 'That card does not match. Try the current color or number.' }
-      const hand = current.hands[player].filter((item) => item.id !== card.id)
-      const hands = { ...current.hands, [player]: hand }
-      if (!hand.length) return { ...current, hands, discard: [...current.discard, card], color: card.color === 'wild' ? current.color : card.color, winner: player, lastAction: `${player} wins this round!` }
-      const next: UnoPlayer = player === 'Him' ? 'Her' : 'Him'
-      let nextHands = hands
-      let turn: UnoPlayer = next
-      let action = `${player} played ${card.value === 'skip' ? 'Skip' : card.value === 'draw2' ? 'Draw Two' : card.value === 'draw4' ? 'Wild Draw Four' : card.value}.`
-      if (card.value === 'skip' || card.value === 'reverse') { turn = player; action += ` ${next} is skipped.` }
-      if (card.value === 'draw2' || card.value === 'draw4') {
-        const amount = card.value === 'draw2' ? 2 : 4
-        const deck = [...current.deck]
-        const penaltyCards = deck.splice(0, amount)
-        nextHands = { ...hands, [next]: [...hands[next], ...penaltyCards] }
-        turn = player
-        action += ` ${next} draws ${amount}.`
-        return { ...current, hands: nextHands, deck, discard: [...current.discard, card], color: card.color === 'wild' ? current.color : card.color, turn, lastAction: action }
-      }
-      const newColor = card.color === 'wild' ? unoColors[Math.floor(Math.random() * unoColors.length)] : card.color
-      if (card.color === 'wild') action += ` Color is ${newColor}.`
-      return { ...current, hands: nextHands, discard: [...current.discard, card], color: newColor, turn, lastAction: action }
-    })
-  }
-
-  function drawCard() {
-    setState((current) => {
-      if (current.winner) return current
-      const deck = [...current.deck]
-      const drawn = deck.shift()
-      if (!drawn) return { ...current, lastAction: 'The draw pile is empty. Play a card to continue.' }
-      return { ...current, deck, hands: { ...current.hands, [current.turn]: [...current.hands[current.turn], drawn] }, turn: current.turn === 'Him' ? 'Her' : 'Him', lastAction: `${current.turn} drew a card. Turn passes.` }
-    })
-  }
-
-  return <div className="game-content">
-    <GameTitle title="UNO" subtitle="A little color, a little chaos." game="uno" onReset={() => setState(createUno())} />
-    <div className="uno-scoreline"><span><span className="player-chip him-chip">Z</span> Him <strong>{state.hands.Him.length}</strong></span><span className="uno-current-color"><i style={{ background: colorHex[state.color] }} /> Current color: <b>{state.color}</b></span><span><span className="player-chip her-chip">K</span> Her <strong>{state.hands.Her.length}</strong></span></div>
-    <div className="uno-table">
-      <div className={`uno-player-row ${state.turn === 'Her' && !state.winner ? 'active-player-row' : ''}`}><div className="game-player-label"><span className="player-chip her-chip">K</span><div><strong>Her</strong><small>{state.turn === 'Her' && !state.winner ? 'Her turn' : `${state.hands.Her.length} cards`}</small></div></div><div className="uno-hand uno-hand-opponent">{state.hands.Her.map((card) => <UnoCardFace key={card.id} card={card} onClick={() => playCard('Her', card)} disabled={state.turn !== 'Her' || !!state.winner} />)}</div></div>
-      <div className="uno-center-row"><div className="draw-stack"><span className="draw-stack-count">{state.deck.length}</span><button className="uno-back-card" onClick={drawCard} disabled={!!state.winner}><span>DRAW<br />ONE</span><Heart size={15} fill="currentColor" /></button><button className="draw-one-button" onClick={drawCard} disabled={!!state.winner}><ArrowDown size={12} /> Draw a card</button></div><div className="uno-discard"><span className="pile-label">DISCARD</span><UnoCardFace card={topCard} /><span className="active-color-chip" style={{ background: colorHex[state.color] }} title={`Current color: ${state.color}`} /></div><div className="uno-center-note"><span className="turn-pip" /><strong>{state.winner ? `${state.winner} wins!` : `${state.turn}’s turn`}</strong><small>{state.lastAction}</small></div></div>
-      <div className={`uno-player-row ${state.turn === 'Him' && !state.winner ? 'active-player-row' : ''}`}><div className="game-player-label"><span className="player-chip him-chip">Z</span><div><strong>Him</strong><small>{state.turn === 'Him' && !state.winner ? 'Your turn' : `${state.hands.Him.length} cards`}</small></div></div><div className="uno-hand">{state.hands.Him.map((card) => <UnoCardFace key={card.id} card={card} onClick={() => playCard('Him', card)} disabled={state.turn !== 'Him' || !!state.winner} />)}</div></div>
-    </div>
-    <div className="game-status"><span className="status-live-dot" />{state.winner ? `${state.winner} takes this one.` : 'Pass the screen when the turn changes.'}<span className="status-spacer" /><HowToPlay game="uno" /></div>
+function UnoTable({ state, playerSeat, busy, onAction }: { state: Extract<GameViewState, { hand: UnoCard[]; color: UnoColor }>; playerSeat: PlayerSeat; busy: boolean; onAction: (action: GameAction) => void }) {
+  const [pendingWildCardId, setPendingWildCardId] = useState<number | null>(null)
+  const canPlay = (card: UnoCard) => card.color === 'wild' || card.color === state.color || card.value === state.topCard.value
+  return <div className="live-game-table">
+    <div className="live-game-opponent"><strong>Seat {otherSeat(playerSeat)}</strong><span>{state.opponentCount} cards in hand</span><span className="live-card-back">{state.opponentCount}</span></div>
+    <div className="live-game-center"><span className="live-game-center-label">Discard</span><div className={`live-playing-card ${unoCardClass(state.topCard.color)}`}><strong>{unoCardLabel(state.topCard)}</strong><small>{state.color} is active</small></div><button className="room-invite-button" type="button" disabled={busy || state.winner !== null || state.turn !== playerSeat || state.hand.some(canPlay)} onClick={() => onAction({ type: 'draw' })}>Draw one · {state.drawCount} left</button></div>
+    <div><p className="live-game-hand-label">Your hand · seat {playerSeat}</p><div className="live-card-hand">{state.hand.map((card) => <button key={card.id} type="button" className={`live-playing-card ${unoCardClass(card.color)}`} disabled={busy || state.turn !== playerSeat || Boolean(state.winner) || !canPlay(card)} onClick={() => card.color === 'wild' ? setPendingWildCardId(card.id) : onAction({ type: 'play-card', cardId: card.id })} aria-label={`Play ${card.color} ${card.value}`}><strong>{unoCardLabel(card)}</strong><small>{card.color}</small></button>)}</div></div>
+    {pendingWildCardId !== null ? <div className="live-suit-chooser" role="group" aria-label="Choose the next UNO color">{(['red', 'blue', 'green', 'yellow'] as UnoColor[]).map((color) => <button key={color} type="button" className={`suit-choice suit-${color}`} disabled={busy} onClick={() => { onAction({ type: 'play-card', cardId: pendingWildCardId, color }); setPendingWildCardId(null) }}>{color}</button>)}</div> : null}
   </div>
 }
 
-function GameTitle({ title, subtitle, game, onReset, actions }: { title: string; subtitle: string; game: GameId; onReset: () => void; actions?: React.ReactNode }) {
-  return <div className="game-title-row"><div><p className="eyebrow"><Gamepad2 size={12} /> TWO-PLAYER TABLE</p><h2>{title}</h2><p className="game-subtitle">{subtitle}</p></div><div className="game-title-actions">{actions}<button className="reset-game-button" onClick={onReset} aria-label={`Reset ${title}`}><RotateCcw size={14} /> New game</button><HowToPlay game={game} /></div></div>
+function CrazyTable({ state, playerSeat, busy, onAction }: { state: Extract<GameViewState, { activeSuit: CardSuit }>; playerSeat: PlayerSeat; busy: boolean; onAction: (action: GameAction) => void }) {
+  const [pendingEightId, setPendingEightId] = useState<number | null>(null)
+  const canPlay = (card: { rank: string; suit: CardSuit }) => card.rank === '8' || card.suit === state.activeSuit || card.rank === state.topCard.rank
+  return <div className="live-game-table">
+    <div className="live-game-opponent"><strong>Seat {otherSeat(playerSeat)}</strong><span>{state.opponentCount} cards in hand</span><span className="live-card-back">{state.opponentCount}</span></div>
+    <div className="live-game-center"><span className="live-game-center-label">Discard</span><div className={`live-playing-card ${state.topCard.suit === 'hearts' || state.topCard.suit === 'diamonds' ? 'red-suit' : ''}`}><strong>{state.topCard.rank}{suitGlyph[state.topCard.suit]}</strong><small>{state.activeSuit} active</small></div><button className="room-invite-button" type="button" disabled={busy || state.turn !== playerSeat || Boolean(state.winner) || state.hand.some(canPlay)} onClick={() => onAction({ type: 'draw' })}>Draw one · {state.drawCount} left</button></div>
+    <div><p className="live-game-hand-label">Your hand · seat {playerSeat}</p><div className="live-card-hand">{state.hand.map((card) => <button key={card.id} type="button" className={`live-playing-card ${card.suit === 'hearts' || card.suit === 'diamonds' ? 'red-suit' : ''}`} disabled={busy || state.turn !== playerSeat || Boolean(state.winner) || !canPlay(card)} onClick={() => card.rank === '8' ? setPendingEightId(card.id) : onAction({ type: 'play-card', cardId: card.id })} aria-label={`Play ${card.rank} of ${card.suit}`}><strong>{card.rank}{suitGlyph[card.suit]}</strong><small>{card.suit}</small></button>)}</div></div>
+    {pendingEightId !== null ? <div className="live-suit-chooser" role="group" aria-label="Choose the next suit">{(['hearts', 'diamonds', 'clubs', 'spades'] as CardSuit[]).map((suit) => <button key={suit} type="button" className={`suit-choice ${suit === 'hearts' || suit === 'diamonds' ? 'red-suit' : ''}`} disabled={busy} onClick={() => { onAction({ type: 'play-card', cardId: pendingEightId, suit }); setPendingEightId(null) }}>{suitGlyph[suit]} {suit}</button>)}</div> : null}
+  </div>
 }
 
-function ChessGame() {
-  const chessRef = useRef(new Chess())
-  const game = chessRef.current
-  const [position, setPosition] = useState(game.fen())
-  const [selected, setSelected] = useState<Square | null>(null)
-  const [history, setHistory] = useState<string[]>([])
-  const [captured, setCaptured] = useState({ w: [] as string[], b: [] as string[] })
-  const [seconds, setSeconds] = useState(0)
-  const [message, setMessage] = useState('White moves first.')
-  const board = game.board()
-  const legalTargets = selected ? game.moves({ square: selected, verbose: true }).map((move) => move.to) : []
+function SpeedTable({ state, playerSeat, busy, onAction }: { state: Extract<GameViewState, { center: unknown[] }>; playerSeat: PlayerSeat; busy: boolean; onAction: (action: GameAction) => void }) {
+  const speed = state as Extract<GameViewState, { center: Array<{ id: number; suit: CardSuit; rank: number }> }>
+  const canPlay = (rank: number) => speed.center.some((top) => Math.abs(rank - top.rank) === 1 || Math.abs(rank - top.rank) === 12)
+  return <div className="live-game-table">
+    <div className="live-game-opponent"><strong>Seat {otherSeat(playerSeat)}</strong><span>{speed.opponentCount} cards in hand</span><span className="live-card-back">{speed.opponentCount}</span></div>
+    <div className="live-game-center"><span className="live-game-center-label">Center piles</span>{speed.center.map((card, index) => <div key={index} className={`live-playing-card ${card.suit === 'hearts' || card.suit === 'diamonds' ? 'red-suit' : ''}`}><strong>{cardRankLabel(card.rank)}{suitGlyph[card.suit]}</strong><small>Pile {index + 1}</small></div>)}<small className="live-game-center-label">{speed.drawCount} draw cards</small></div>
+    <div><p className="live-game-hand-label">Your hand · cards can be played at any time</p><div className="live-card-hand">{speed.hand.map((card) => <button key={card.id} type="button" className={`live-playing-card ${card.suit === 'hearts' || card.suit === 'diamonds' ? 'red-suit' : ''}`} disabled={busy || Boolean(speed.winner) || !canPlay(card.rank)} onClick={() => onAction({ type: 'play-card', cardId: card.id })} aria-label={`Play ${cardRankLabel(card.rank)} of ${card.suit}`}><strong>{cardRankLabel(card.rank)}{suitGlyph[card.suit]}</strong><small>{card.suit}</small></button>)}</div></div>
+  </div>
+}
 
-  useEffect(() => {
-    const timer = window.setInterval(() => setSeconds((value) => value + 1), 1000)
-    return () => window.clearInterval(timer)
-  }, [])
-
-  function resetChess() {
-    game.reset()
-    setPosition(game.fen())
-    setSelected(null)
-    setHistory([])
-    setCaptured({ w: [], b: [] })
-    setSeconds(0)
-    setMessage('White moves first.')
-  }
+function ChessTable({ state, playerSeat, selected, setSelected, busy, onAction }: { state: Extract<GameViewState, { fen: string }>; playerSeat: PlayerSeat; selected: Square | null; setSelected: (square: Square | null) => void; busy: boolean; onAction: (action: GameAction) => void }) {
+  const chess = new Chess(state.fen)
+  const board = chess.board()
+  const myColor = state.whiteSeat === playerSeat ? 'w' : 'b'
+  const legalTargets = selected ? chess.moves({ square: selected, verbose: true }).map((move) => move.to) : []
 
   function chooseSquare(square: Square) {
-    const piece = game.get(square)
+    const piece = chess.get(square)
     if (selected && legalTargets.includes(square)) {
-      try {
-        const move = game.move({ from: selected, to: square, promotion: 'q' })
-        setPosition(game.fen())
-        setSelected(null)
-        setHistory(game.history())
-        if (move.captured) setCaptured((current) => ({ ...current, [move.color]: [...current[move.color], move.captured!] }))
-        setMessage(game.isCheckmate() ? `${move.color === 'w' ? 'White' : 'Black'} wins by checkmate.` : game.isDraw() ? 'A draw. Good game.' : game.isCheck() ? `${game.turn() === 'w' ? 'White' : 'Black'} is in check.` : `${game.turn() === 'w' ? 'White' : 'Black'} to move.`)
-      } catch { setSelected(null) }
+      const from = selected
+      setSelected(null)
+      onAction({ type: 'move', from, to: square })
       return
     }
-    if (piece && piece.color === game.turn() && !game.isGameOver()) setSelected(square)
+    if (piece?.color === myColor && state.turn === playerSeat && !state.winner) setSelected(square)
     else setSelected(null)
   }
 
-  const fileLetters = 'abcdefgh'
-  const clock = `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`
-  const symbols: Record<string, string> = { wk: '♔', wq: '♕', wr: '♖', wb: '♗', wn: '♘', wp: '♙', bk: '♚', bq: '♛', br: '♜', bb: '♝', bn: '♞', bp: '♟' }
-
-  return <div className="game-content">
-    <GameTitle title="Chess" subtitle="Make your move. Take your time." game="chess" onReset={resetChess} />
-    <div className="chess-layout">
-      <div className="chess-board-wrap"><div className="chess-player-bar"><span className="player-chip her-chip">K</span><span>Her <small>Black</small></span><strong className={game.turn() === 'b' ? 'chess-active-clock' : ''}>{clock}</strong></div>
-        <div className="chess-board" aria-label="Chess board">
-          {board.map((row, rowIndex) => row.map((piece, colIndex) => {
-            const square = `${fileLetters[colIndex]}${8 - rowIndex}` as Square
-            const light = (rowIndex + colIndex) % 2 === 0
-            const isSelected = selected === square
-            const target = legalTargets.includes(square)
-            return <button key={square} className={`chess-square ${light ? 'square-light' : 'square-dark'} ${isSelected ? 'square-selected' : ''} ${target ? 'square-target' : ''}`} onClick={() => chooseSquare(square)} aria-label={`${square}${piece ? ` ${piece.color === 'w' ? 'white' : 'black'} ${piece.type}` : ''}`}>
-              {piece ? <span className={`chess-piece chess-${piece.color}`}>{symbols[`${piece.color}${piece.type}`]}</span> : null}
-              {target && !piece ? <i className="legal-dot" /> : null}{target && piece ? <i className="legal-ring" /> : null}
-              {colIndex === 0 ? <small className="rank-label">{8 - rowIndex}</small> : null}{rowIndex === 7 ? <small className="file-label">{fileLetters[colIndex]}</small> : null}
-            </button>
-          }))}
-        </div>
-        <div className="chess-player-bar"><span className="player-chip him-chip">Z</span><span>Him <small>White</small></span><strong className={game.turn() === 'w' ? 'chess-active-clock' : ''}>{clock}</strong></div>
-      </div>
-      <aside className="chess-side-panel"><div className="chess-turn-card"><span className="turn-indicator"><span /></span><div><small>NOW MOVING</small><strong>{game.turn() === 'w' ? 'Him · White' : 'Her · Black'}</strong></div></div><p className="chess-message">{message}</p><div className="captured-strip"><span>Captured</span><p><i>{captured.w.map((piece, index) => <b key={`${piece}-${index}`}>{symbols[`b${piece}`]}</b>)}</i><i>{captured.b.map((piece, index) => <b key={`${piece}-${index}`}>{symbols[`w${piece}`]}</b>)}</i></p></div><div className="move-history"><div className="move-history-header"><span>MOVE HISTORY</span><span>{history.length} ply</span></div><div className="move-list">{history.length ? history.map((move, index) => <span key={`${move}-${index}`}><small>{Math.floor(index / 2) + 1}{index % 2 === 0 ? '.' : '…'}</small>{move}</span>) : <p>Moves will appear here.</p>}</div></div><div className="chess-turn-note"><Clock3 size={13} /> Casual clock · {clock}</div></aside>
-    </div>
-    <div className="game-status"><span className="status-live-dot" />{message}<span className="status-spacer" /><HowToPlay game="chess" /></div>
+  return <div className="live-chess-layout">
+    <div className="live-chess-board" aria-label="Shared chess board">{board.map((row, rowIndex) => row.map((piece, columnIndex) => {
+      const square = `${chessFiles[columnIndex]}${8 - rowIndex}` as Square
+      const isLight = (rowIndex + columnIndex) % 2 === 0
+      const target = legalTargets.includes(square)
+      return <button key={square} type="button" className={`live-chess-square ${isLight ? 'light' : 'dark'} ${selected === square ? 'selected' : ''} ${target ? piece ? 'legal-piece' : 'legal' : ''}`} onClick={() => chooseSquare(square)} disabled={busy || Boolean(state.winner)} aria-label={`${square}${piece ? ` ${piece.color === 'w' ? 'white' : 'black'} ${piece.type}` : ''}`}>
+        {piece ? chessSymbols[`${piece.color}${piece.type}`] : null}
+      </button>
+    }))}</div>
+    <aside className="live-chess-side"><p><strong>White:</strong> seat {state.whiteSeat}</p><p><strong>Black:</strong> seat {otherSeat(state.whiteSeat)}</p><p>{state.lastAction}</p><p>Moves and check are validated on the server.</p></aside>
   </div>
 }
 
-type Suit = '♠' | '♥' | '♦' | '♣'
-type PlayingCard = { rank: string; suit: Suit; key: string }
-const suits: Suit[] = ['♠', '♥', '♦', '♣']
-const ranks = ['A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K']
-function createDeck(): PlayingCard[] { return shuffled(suits.flatMap((suit) => ranks.map((rank) => ({ rank, suit, key: `${rank}${suit}` })))) }
-function cardIsRed(suit: Suit) { return suit === '♥' || suit === '♦' }
-function CardFace({ card, onClick, disabled, compact = false }: { card: PlayingCard; onClick?: () => void; disabled?: boolean; compact?: boolean }) {
-  return <button className={`playing-card ${cardIsRed(card.suit) ? 'card-red' : ''} ${compact ? 'playing-card-compact' : ''}`} onClick={onClick} disabled={disabled} aria-label={`${card.rank} of ${card.suit}`}><span>{card.rank}<i>{card.suit}</i></span><strong>{card.suit}</strong><span>{card.rank}<i>{card.suit}</i></span></button>
-}
-
-function ClassicCards({ game, onChange }: { game: 'speed' | 'crazy'; onChange: (game: GameId) => void }) {
-  const [speed, setSpeed] = useState(() => newSpeedGame())
-  const [crazy, setCrazy] = useState(() => newCrazyGame())
-  const [pendingEight, setPendingEight] = useState<PlayingCard | null>(null)
-  const current = game === 'speed' ? speed : crazy
-
-  function resetClassic() {
-    if (game === 'speed') setSpeed(newSpeedGame())
-    else { setCrazy(newCrazyGame()); setPendingEight(null) }
-  }
-
-  function playCrazy(player: UnoPlayer, card: PlayingCard, suit?: Suit) {
-    if (crazy.turn !== player || crazy.winner) return
-    const top = crazy.discard[crazy.discard.length - 1]
-    if (card.rank !== '8' && card.suit !== crazy.activeSuit && card.rank !== top.rank) return
-    if (card.rank === '8' && !suit) { setPendingEight(card); return }
-    const hands = { ...crazy.hands, [player]: crazy.hands[player].filter((item) => item.key !== card.key) }
-    setCrazy({ ...crazy, hands, discard: [...crazy.discard, card], activeSuit: suit ?? card.suit, turn: player === 'Him' ? 'Her' : 'Him', winner: hands[player].length === 0 ? player : null })
-    setPendingEight(null)
-  }
-
-  function drawCrazy() {
-    if (crazy.winner) return
-    const deck = [...crazy.deck]
-    const card = deck.pop()
-    if (!card) return
-    const player = crazy.turn
-    setCrazy({ ...crazy, deck, hands: { ...crazy.hands, [player]: [...crazy.hands[player], card] }, turn: player === 'Him' ? 'Her' : 'Him' })
-    setPendingEight(null)
-  }
-
-  function playSpeed(player: UnoPlayer, card: PlayingCard, pileIndex: 0 | 1) {
-    if (speed.winner || !isSpeedPlayable(card, speed.piles[pileIndex])) return
-    const hands = { ...speed.hands, [player]: speed.hands[player].filter((item) => item.key !== card.key) }
-    const deck = [...speed.deck]
-    while (hands[player].length < 5 && deck.length) hands[player].push(deck.pop()!)
-    const piles: [PlayingCard, PlayingCard] = [...speed.piles]
-    piles[pileIndex] = card
-    const winner = hands[player].length === 0 && deck.length === 0 ? player : null
-    setSpeed({ ...speed, hands, deck, piles, winner })
-  }
-
-  function resetSpeedStacks() {
-    const discard = speed.piles
-    if (speed.deck.length < 2) return
-    setSpeed({ ...speed, piles: [speed.deck.pop()!, speed.deck.pop()!], deck: [...speed.deck, ...discard] })
-  }
-
-  return <div className="game-content">
-    <GameTitle title={game === 'speed' ? 'Speed' : 'Crazy Eights'} subtitle={game === 'speed' ? 'Fast hands. No turn waiting.' : 'The classic, with a little extra charm.'} game={game} onReset={resetClassic} actions={<div className="classic-toggle"><button className={game === 'speed' ? 'classic-toggle-active' : ''} onClick={() => onChange('speed')}>Speed</button><button className={game === 'crazy' ? 'classic-toggle-active' : ''} onClick={() => onChange('crazy')}>Crazy 8s</button></div>} />
-    {game === 'speed' ? <>
-      <div className="speed-score-strip"><span><i className="player-chip him-chip">Z</i> Him <b>{speed.hands.Him.length}</b></span><span className="speed-deck-count"><Layers size={13} /> {speed.deck.length} draw cards</span><span><i className="player-chip her-chip">K</i> Her <b>{speed.hands.Her.length}</b></span></div>
-      <div className="speed-table"><div className="speed-piles"><div className="speed-stack"><small>PLAY ON EITHER</small><CardFace card={speed.piles[0]} compact /><ArrowLeftRight size={15} /><CardFace card={speed.piles[1]} compact /></div><button className="reset-piles-button" onClick={resetSpeedStacks}><RotateCcw size={12} /> Stuck? Refill center</button></div>
-        {(['Her', 'Him'] as UnoPlayer[]).map((player) => <div className={`speed-player ${player === 'Her' ? 'speed-player-top' : ''}`} key={player}><div className="speed-player-label"><span className={`player-chip ${player === 'Her' ? 'her-chip' : 'him-chip'}`}>{player === 'Her' ? 'K' : 'Z'}</span><strong>{player}</strong><small>{player === 'Her' ? 'Top hand' : 'Your hand'}</small></div><div className="speed-hand">{speed.hands[player].map((card) => <div className="speed-card-wrap" key={card.key}><CardFace card={card} compact disabled={!!speed.winner} onClick={() => { const pileIndex = isSpeedPlayable(card, speed.piles[0]) ? 0 : 1; if (isSpeedPlayable(card, speed.piles[pileIndex])) playSpeed(player, card, pileIndex) }} />{speed.piles.some((pile) => isSpeedPlayable(card, pile)) ? <span className="playable-tag">PLAY</span> : null}</div>)}</div></div>)}
-      </div><div className="game-status"><span className="status-live-dot" />{speed.winner ? `${speed.winner} wins the race!` : 'Play one rank up, one down, or the same rank.'}<span className="status-spacer" /><HowToPlay game="speed" /></div>
-    </> : <>
-      <div className="crazy-status-row"><span><i className="player-chip her-chip">K</i> Her <b>{crazy.hands.Her.length}</b></span><span className="crazy-turn-pill"><span /> {crazy.winner ? `${crazy.winner} wins!` : `${crazy.turn}’s turn`}</span><span><i className="player-chip him-chip">Z</i> Him <b>{crazy.hands.Him.length}</b></span></div>
-      <div className="crazy-table"><div className={`crazy-hand-row ${crazy.turn === 'Her' ? 'active-player-row' : ''}`}><div className="game-player-label"><span className="player-chip her-chip">K</span><div><strong>Her</strong><small>{crazy.turn === 'Her' ? 'Her turn' : `${crazy.hands.Her.length} cards`}</small></div></div><div className="crazy-hand">{crazy.hands.Her.map((card) => <CardFace key={card.key} card={card} disabled={crazy.turn !== 'Her' || !!crazy.winner} onClick={() => playCrazy('Her', card)} />)}</div></div>
-        <div className="crazy-center"><div className="crazy-deck"><Layers size={16} /><span>{crazy.deck.length}</span><small>DRAW PILE</small></div><div className="crazy-discard"><small>TOP CARD</small><CardFace card={crazy.discard[crazy.discard.length - 1]} /><span className="active-suit-note">Current suit <strong className={cardIsRed(crazy.activeSuit) ? 'card-red-text' : ''}>{crazy.activeSuit}</strong></span></div><button className="draw-one-button" onClick={drawCrazy} disabled={!!crazy.winner}><ArrowDown size={12} /> Draw a card</button></div>
-        <div className={`crazy-hand-row ${crazy.turn === 'Him' ? 'active-player-row' : ''}`}><div className="game-player-label"><span className="player-chip him-chip">Z</span><div><strong>Him</strong><small>{crazy.turn === 'Him' ? 'Your turn' : `${crazy.hands.Him.length} cards`}</small></div></div><div className="crazy-hand">{crazy.hands.Him.map((card) => <CardFace key={card.key} card={card} disabled={crazy.turn !== 'Him' || !!crazy.winner} onClick={() => playCrazy('Him', card)} />)}</div></div>
-      </div>
-      {pendingEight ? <div className="suit-picker"><span>Choose the next suit</span>{suits.map((suit) => <button key={suit} className={cardIsRed(suit) ? 'card-red-text' : ''} onClick={() => playCrazy(crazy.turn, pendingEight, suit)}>{suit}</button>)}</div> : null}
-      <div className="game-status"><span className="status-live-dot" />{crazy.winner ? `${crazy.winner} wins!` : 'Match the suit or rank. Eights are wild.'}<span className="status-spacer" /><HowToPlay game="crazy" /></div>
-    </>}
+function ConnectTable({ state, playerSeat, busy, onAction }: { state: Extract<GameViewState, { board: Array<PlayerSeat | null> }>; playerSeat: PlayerSeat; busy: boolean; onAction: (action: GameAction) => void }) {
+  return <div>
+    <div className="live-connect-columns">{Array.from({ length: 7 }, (_, column) => <button key={column} type="button" onClick={() => onAction({ type: 'drop', column })} disabled={busy || state.turn !== playerSeat || Boolean(state.winner)} aria-label={`Drop in column ${column + 1}`}>↓</button>)}</div>
+    <div className="live-game-board live-connect-board">{state.board.map((seat, index) => <div className="live-connect-cell" key={index} aria-label={seat ? `Seat ${seat}` : 'Empty space'}><i className={seat ? seat === 'Z' ? 'seat-z' : 'seat-a' : ''} /></div>)}</div>
   </div>
 }
 
-function newSpeedGame() {
-  const deck = createDeck()
-  const Him = deck.splice(0, 5)
-  const Her = deck.splice(0, 5)
-  const piles: [PlayingCard, PlayingCard] = [deck.pop()!, deck.pop()!]
-  return { deck, hands: { Him, Her }, piles, winner: null as UnoPlayer | null }
-}
-function rankValue(rank: string) { return rank === 'A' ? 1 : rank === 'J' ? 11 : rank === 'Q' ? 12 : rank === 'K' ? 13 : Number(rank) }
-function isSpeedPlayable(card: PlayingCard, top: PlayingCard) { const difference = Math.abs(rankValue(card.rank) - rankValue(top.rank)); return difference === 0 || difference === 1 || difference === 12 }
-function newCrazyGame() {
-  const deck = createDeck()
-  const Him = deck.splice(0, 5)
-  const Her = deck.splice(0, 5)
-  let first = deck.pop()!
-  while (first.rank === '8') { deck.unshift(first); first = deck.pop()! }
-  return { deck, hands: { Him, Her }, discard: [first], activeSuit: first.suit, turn: 'Him' as UnoPlayer, winner: null as UnoPlayer | null }
+function TicTable({ state, playerSeat, busy, onAction }: { state: Extract<GameViewState, { marks: Record<PlayerSeat, 'X' | 'O'> }>; playerSeat: PlayerSeat; busy: boolean; onAction: (action: GameAction) => void }) {
+  return <div className="live-game-board live-tic-board">{state.board.map((mark, index) => <button key={index} type="button" className={`live-tic-cell ${mark === 'O' ? 'mark-o' : ''}`} onClick={() => onAction({ type: 'place', index })} disabled={busy || state.turn !== playerSeat || Boolean(state.winner) || Boolean(mark)} aria-label={mark ? `${mark} at square ${index + 1}` : `Place your mark at square ${index + 1}`}>{mark}</button>)}</div>
 }
 
-function TicTacToe() {
-  const [board, setBoard] = useState<Array<'X' | 'O' | null>>(() => Array(9).fill(null))
-  const [turn, setTurn] = useState<'X' | 'O'>('X')
-  const [round, setRound] = useState(1)
-  const [scores, setScores] = useState({ X: 0, O: 0 })
-  const winner = useMemo(() => {
-    const lines = [[0,1,2],[3,4,5],[6,7,8],[0,3,6],[1,4,7],[2,5,8],[0,4,8],[2,4,6]]
-    const line = lines.find(([a,b,c]) => board[a] && board[a] === board[b] && board[a] === board[c])
-    return line ? board[line[0]] : null
-  }, [board])
-  const draw = !winner && board.every(Boolean)
-
-  function makeMove(index: number) {
-    if (board[index] || winner || draw) return
-    const next = [...board]
-    next[index] = turn
-    setBoard(next)
-    const lines = [[0,1,2],[0,3,6],[0,4,8],[1,4,7],[2,5,8],[2,4,6],[3,4,5],[6,7,8]]
-    if (lines.some(([a,b,c]) => next[a] && next[a] === next[b] && next[a] === next[c])) setScores((current) => ({ ...current, [turn]: current[turn] + 1 }))
-    setTurn(turn === 'X' ? 'O' : 'X')
-  }
-
-  function resetRound() { setBoard(Array(9).fill(null)); setTurn(round % 2 ? 'X' : 'O'); setRound((value) => value + 1) }
-  function resetMatch() { setBoard(Array(9).fill(null)); setTurn('X'); setRound(1); setScores({ X: 0, O: 0 }) }
-  const status = winner ? `${winner === 'X' ? 'Him' : 'Her'} takes this round.` : draw ? 'A perfect little draw.' : `${turn === 'X' ? 'Him' : 'Her'} to play`
-
-  return <div className="game-content">
-    <GameTitle title="Tic-Tac-Toe" subtitle="Nine squares. One more reason to rematch." game="tic" onReset={resetMatch} />
-    <div className="tic-scorebar"><span className="tic-player"><i className="player-chip him-chip">Z</i><span>Him <b>{scores.X}</b></span></span><div className="tic-round-label"><span className="turn-pip" />{status}</div><span className="tic-player"><i className="player-chip her-chip">K</i><span>Her <b>{scores.O}</b></span></span></div>
-    <div className="tic-board" role="grid" aria-label="Tic tac toe board">{board.map((value, index) => <button key={index} role="gridcell" className={`tic-cell ${value === 'X' ? 'tic-x' : value === 'O' ? 'tic-o' : ''}`} onClick={() => makeMove(index)} disabled={!!winner || draw || !!value} aria-label={`Cell ${index + 1}${value ? `, ${value}` : ', empty'}`}>{value}</button>)}</div>
-    <div className="tic-footer"><span><Sparkles size={12} /> Glow edition</span>{winner || draw ? <button onClick={resetRound}><RotateCcw size={12} /> Next round</button> : <HowToPlay game="tic" />}</div>
-    {(winner || draw) ? <div className="game-status"><span className="status-live-dot" />{status}<span className="status-spacer" /><HowToPlay game="tic" /></div> : null}
-  </div>
-}
-
-function ConnectFour() {
-  const [board, setBoard] = useState<Array<'R' | 'Y' | null>>(() => Array(42).fill(null))
-  const [turn, setTurn] = useState<'R' | 'Y'>('R')
-  const [winner, setWinner] = useState<'R' | 'Y' | 'draw' | null>(null)
-  const [scores, setScores] = useState({ R: 0, Y: 0 })
-  const [round, setRound] = useState(1)
-  function drop(column: number) {
-    if (winner) return
-    const next = [...board]
-    let row = 5
-    while (row >= 0 && next[row * 7 + column]) row -= 1
-    if (row < 0) return
-    next[row * 7 + column] = turn
-    setBoard(next)
-    let won = false
-    for (let r = 0; r < 6; r += 1) for (let c = 0; c < 7; c += 1) {
-      const cell = next[r * 7 + c]
-      if (!cell) continue
-      for (const [dr, dc] of [[0,1],[1,0],[1,1],[1,-1]]) {
-        const nr = r + dr * 3, nc = c + dc * 3
-        if (nr < 0 || nr >= 6 || nc < 0 || nc >= 7) continue
-        if ([1,2,3].every((step) => next[(r + dr * step) * 7 + c + dc * step] === cell)) won = true
-      }
-    }
-    if (won) { setWinner(turn); setScores((current) => ({ ...current, [turn]: current[turn] + 1 })) }
-    else if (next.every(Boolean)) setWinner('draw')
-    else setTurn(turn === 'R' ? 'Y' : 'R')
-  }
-  function resetBoard() { setBoard(Array(42).fill(null)); setWinner(null); setTurn(round % 2 ? 'R' : 'Y'); setRound((value) => value + 1) }
-  function resetMatch() { setBoard(Array(42).fill(null)); setWinner(null); setTurn('R'); setRound(1); setScores({ R: 0, Y: 0 }) }
-  const status = winner === 'draw' ? 'The board is full. It’s a draw.' : winner ? `${winner === 'R' ? 'Him' : 'Her'} got four in a row!` : `${turn === 'R' ? 'Him' : 'Her'} to drop`
-  return <div className="game-content">
-    <GameTitle title="Connect Four" subtitle="A little strategy, one disc at a time." game="connect" onReset={resetMatch} />
-    <div className="connect-scorebar"><span><i className="player-chip him-chip">Z</i> Him <b>{scores.R}</b></span><span className="connect-turn">{status}</span><span><i className="player-chip her-chip">K</i> Her <b>{scores.Y}</b></span></div>
-    <div className="connect-board-wrap"><div className="connect-columns">{Array.from({ length: 7 }, (_, column) => <button key={column} onClick={() => drop(column)} disabled={!!winner || board[column] !== null} aria-label={`Drop in column ${column + 1}`}><ChevronDown size={14} /></button>)}</div><div className="connect-board" role="grid" aria-label="Connect four board">{board.map((cell, index) => <button key={index} role="gridcell" className={`connect-cell ${cell === 'R' ? 'disc-him' : cell === 'Y' ? 'disc-her' : ''}`} onClick={() => drop(index % 7)} disabled={!!winner || !!cell} aria-label={`Row ${Math.floor(index / 7) + 1}, column ${index % 7 + 1}${cell ? ', occupied' : ', empty'}`}><span /></button>)}</div></div>
-    <div className="tic-footer"><span><ArrowDown size={12} /> Discs fall to the lowest open space</span>{winner ? <button onClick={resetBoard}><RotateCcw size={12} /> Next round</button> : <HowToPlay game="connect" />}</div>
-  </div>
-}
-
-function MemoryMatch() {
-  const iconSet = ['✦','♡','☾','♧','✿','◇','♬','☼']
-  const [cards, setCards] = useState(() => shuffled([...iconSet, ...iconSet].map((icon, index) => ({ id: index, icon }))))
-  const [revealed, setRevealed] = useState<number[]>([])
-  const [matched, setMatched] = useState<number[]>([])
-  const [turn, setTurn] = useState<'Him' | 'Her'>('Him')
-  const [scores, setScores] = useState({ Him: 0, Her: 0 })
-  const [moves, setMoves] = useState(0)
-  const [locked, setLocked] = useState(false)
-  const finished = matched.length === cards.length
-  const timerRef = useRef<number | null>(null)
-
-  function resetMemory() {
-    setCards(shuffled([...iconSet, ...iconSet].map((icon, index) => ({ id: index, icon }))))
-    setRevealed([]); setMatched([]); setTurn('Him'); setScores({ Him: 0, Her: 0 }); setMoves(0); setLocked(false)
-    if (timerRef.current) window.clearTimeout(timerRef.current)
-  }
-
-  function flip(id: number) {
-    if (locked || finished || revealed.includes(id) || matched.includes(id)) return
-    const next = [...revealed, id]
-    setRevealed(next)
-    if (next.length < 2) return
-    setMoves((count) => count + 1)
-    const first = cards.find((card) => card.id === next[0])!
-    const second = cards.find((card) => card.id === next[1])!
-    if (first.icon === second.icon) {
-      setMatched((current) => [...current, ...next])
-      setScores((current) => ({ ...current, [turn]: current[turn] + 1 }))
-      setRevealed([])
-    } else {
-      setLocked(true)
-      timerRef.current = window.setTimeout(() => { setRevealed([]); setTurn((current) => current === 'Him' ? 'Her' : 'Him'); setLocked(false) }, 800)
-    }
-  }
-
-  return <div className="game-content">
-    <GameTitle title="Memory Match" subtitle="A little memory goes a long way." game="memory" onReset={resetMemory} />
-    <div className="memory-scorebar"><span><i className="player-chip him-chip">Z</i> Him <b>{scores.Him}</b></span><span className="memory-moves"><Dices size={13} /> {moves} turns</span><span><i className="player-chip her-chip">K</i> Her <b>{scores.Her}</b></span></div>
-    <div className="memory-board" role="grid" aria-label="Memory match cards">{cards.map((card) => { const faceUp = revealed.includes(card.id) || matched.includes(card.id); return <button key={card.id} role="gridcell" className={`memory-card ${faceUp ? 'memory-card-face-up' : ''} ${matched.includes(card.id) ? 'memory-card-matched' : ''}`} onClick={() => flip(card.id)} aria-label={faceUp ? `Card ${card.icon}` : 'Face-down card'} aria-pressed={faceUp}>{faceUp ? card.icon : <span>✦</span>}</button> })}</div>
-    <div className="game-status"><span className="status-live-dot" />{finished ? (scores.Him === scores.Her ? 'A perfect tie. Rematch?' : `${scores.Him > scores.Her ? 'Him' : 'Her'} wins memory night!`) : `${turn} picks the next pair.`}<span className="status-spacer" /><HowToPlay game="memory" /></div>
+function MemoryTable({ state, playerSeat, busy, onAction }: { state: Extract<GameViewState, { cards: unknown[] }>; playerSeat: PlayerSeat; busy: boolean; onAction: (action: GameAction) => void }) {
+  const memory = state as Extract<GameViewState, { cards: Array<{ id: number; face: string | null }> }>
+  return <div>
+    <div className="live-game-opponent"><strong>Pairs</strong><span>Seat Z: {memory.scores.Z} · Seat A: {memory.scores.A}</span><span>Your turn: {memory.turn === playerSeat ? 'yes' : 'no'}</span></div>
+    <div className="live-game-board live-memory-board">{memory.cards.map((card) => {
+      const shown = card.face !== null
+      return <button key={card.id} type="button" className={`live-memory-cell ${shown ? 'face-up' : ''}`} onClick={() => onAction({ type: 'flip', cardId: card.id })} disabled={busy || memory.turn !== playerSeat || Boolean(memory.winner) || shown || memory.revealed.length >= 2} aria-label={shown ? `Revealed card ${card.face}` : 'Reveal card'}>{shown ? card.face : '·'}</button>
+    })}</div>
   </div>
 }

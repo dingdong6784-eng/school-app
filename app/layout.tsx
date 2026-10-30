@@ -1,11 +1,12 @@
 import { Analytics } from '@vercel/analytics/next'
 import type { Metadata, Viewport } from 'next'
 import './globals.css'
+import './lounge-live.css'
 
 export const metadata: Metadata = {
-  title: 'Z & K Lounge — Our Private Little World',
+  title: 'Z & A Lounge — Our Private Little World',
   description: 'A private movie night, game table, and little corner of the internet for two.',
-  applicationName: 'Z & K Lounge',
+  applicationName: 'Z & A Lounge',
   generator: 'v0.app',
   icons: {
     icon: [

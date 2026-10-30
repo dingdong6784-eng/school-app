@@ -1,35 +1,20 @@
 'use server'
 
-import { and, asc, eq } from 'drizzle-orm'
+import { and, desc, eq } from 'drizzle-orm'
 import { db } from '@/lib/db'
 import { coupleMessages } from '@/lib/db/schema'
-import { clearLoungeAccess, hasLoungeAccess, unlockWithPasscode } from '@/lib/lounge-access'
+import { requireRoomMembership } from '@/lib/room-auth'
 
-const ROOM_ID = 'z-k-lounge'
 const QUICK_REACTIONS = ['❤️', '🍿', '🎮', '😮', '😂'] as const
 export type LoungeAuthor = 'Him' | 'Her'
 export type LoungeReaction = (typeof QUICK_REACTIONS)[number]
 
-async function requireAccess() {
-  if (!(await hasLoungeAccess())) throw new Error('Unlock the lounge to continue.')
+function authorForSeat(seat: 'Z' | 'A'): LoungeAuthor {
+  return seat === 'Z' ? 'Him' : 'Her'
 }
 
-export async function unlockLounge(passcode: string) {
-  return unlockWithPasscode(passcode)
-}
-
-export async function checkLoungeSession() {
-  return hasLoungeAccess()
-}
-
-export async function lockLounge() {
-  await clearLoungeAccess()
-  return true
-}
-
-export async function listLoungeMessages() {
-  await requireAccess()
-
+export async function listLoungeMessages(roomId: string) {
+  await requireRoomMembership(roomId)
   const rows = await db
     .select({
       id: coupleMessages.id,
@@ -39,22 +24,22 @@ export async function listLoungeMessages() {
       createdAt: coupleMessages.createdAt,
     })
     .from(coupleMessages)
-    .where(eq(coupleMessages.roomId, ROOM_ID))
-    .orderBy(asc(coupleMessages.createdAt))
+    .where(eq(coupleMessages.roomId, roomId))
+    .orderBy(desc(coupleMessages.createdAt))
     .limit(100)
 
-  return rows.map((row) => ({ ...row, createdAt: row.createdAt.toISOString() }))
+  return rows.reverse().map((row) => ({ ...row, createdAt: row.createdAt.toISOString() }))
 }
 
-export async function sendLoungeMessage(author: LoungeAuthor, text: string) {
-  await requireAccess()
-  if (author !== 'Him' && author !== 'Her') throw new Error('Choose a valid chat profile.')
+export async function sendLoungeMessage(roomId: string, text: string) {
+  const membership = await requireRoomMembership(roomId)
+  if (typeof text !== 'string') throw new Error('Messages must be plain text.')
   const body = text.trim()
   if (!body || body.length > 1000) throw new Error('Messages must be between 1 and 1000 characters.')
 
   const [message] = await db
     .insert(coupleMessages)
-    .values({ roomId: ROOM_ID, author, body })
+    .values({ roomId, author: authorForSeat(membership.seat), body })
     .returning({
       id: coupleMessages.id,
       author: coupleMessages.author,
@@ -66,16 +51,16 @@ export async function sendLoungeMessage(author: LoungeAuthor, text: string) {
   return { ...message, createdAt: message.createdAt.toISOString() }
 }
 
-export async function reactToLoungeMessage(id: string, reaction: LoungeReaction) {
-  await requireAccess()
-  if (!/^[0-9a-f-]{36}$/i.test(id) || !QUICK_REACTIONS.includes(reaction)) {
+export async function reactToLoungeMessage(roomId: string, id: string, reaction: LoungeReaction) {
+  await requireRoomMembership(roomId)
+  if (typeof id !== 'string' || !/^[0-9a-f-]{36}$/i.test(id) || !QUICK_REACTIONS.includes(reaction)) {
     throw new Error('That reaction is not available.')
   }
 
   const [updated] = await db
     .update(coupleMessages)
     .set({ reaction })
-    .where(and(eq(coupleMessages.id, id), eq(coupleMessages.roomId, ROOM_ID)))
+    .where(and(eq(coupleMessages.id, id), eq(coupleMessages.roomId, roomId)))
     .returning({ id: coupleMessages.id, reaction: coupleMessages.reaction })
 
   return updated ?? null
