@@ -1,50 +1,97 @@
 'use client'
 
-import { FormEvent, useEffect, useMemo, useState } from 'react'
-import { ArrowDown, ArrowRight, Check, Clapperboard, Clock3, ExternalLink, Heart, Info, Link2, Play, Plus, Search, ShieldCheck, Sparkles, Volume2, VolumeX } from 'lucide-react'
+import { FormEvent, useEffect, useMemo, useRef, useState } from 'react'
+import useSWR from 'swr'
+import { ArrowDown, ArrowRight, Check, Clapperboard, Clock3, ExternalLink, Heart, Info, Link2, LoaderCircle, Play, Plus, Search, ShieldCheck, Sparkles, Volume2, VolumeX } from 'lucide-react'
+import { getLoungeMediaState, updateLoungeMediaState } from '@/app/actions/media'
+import { YouTubePlayer } from '@/components/youtube-player'
+import type { CatalogMovie, LoungeMediaState } from '@/lib/watch-party-types'
 
-type Category = 'Romantic Comedies' | 'Trending Action' | 'Cozy Horror'
-type Movie = { title: string; year: string; genre: Category; runtime: string; note: string; tone: string; accent: string; kind?: 'Film' | 'Series' }
+type CategoryFilter = 'All picks' | 'Romantic Comedies' | 'Trending Action' | 'Cozy Horror' | 'Family Favorites' | 'Custom URL Stream'
+const categories: CategoryFilter[] = ['All picks', 'Romantic Comedies', 'Trending Action', 'Cozy Horror', 'Family Favorites', 'Custom URL Stream']
+const categoryApiKeys: Record<Exclude<CategoryFilter, 'Custom URL Stream'>, string> = {
+  'All picks': 'all',
+  'Romantic Comedies': 'romcom',
+  'Trending Action': 'action',
+  'Cozy Horror': 'horror',
+  'Family Favorites': 'family',
+}
 
-const movies: Movie[] = [
-  { title: 'About Time', year: '2013', genre: 'Romantic Comedies', runtime: '2h 3m', note: 'A little time travel. A lot of heart.', tone: 'rose', accent: 'TIME WELL SPENT' },
-  { title: 'Palm Springs', year: '2020', genre: 'Romantic Comedies', runtime: '1h 30m', note: 'An endless afternoon together.', tone: 'amber', accent: 'A DAY TO REMEMBER' },
-  { title: 'Notting Hill', year: '1999', genre: 'Romantic Comedies', runtime: '2h 4m', note: 'A classic for a cozy night in.', tone: 'blue', accent: 'VERY NICE TO MEET YOU' },
-  { title: 'The Big Sick', year: '2017', genre: 'Romantic Comedies', runtime: '2h', note: 'Funny, tender, and true.', tone: 'plum', accent: 'LOVE, UNEXPECTEDLY' },
-  { title: 'Dash & Lily', year: '2020', genre: 'Romantic Comedies', runtime: '8 episodes', note: 'A festive little New York love story.', tone: 'amber', accent: 'AN ADVENTURE IN EIGHT DAYS', kind: 'Series' },
-  { title: 'Dune: Part Two', year: '2024', genre: 'Trending Action', runtime: '2h 46m', note: 'Big-screen energy, sofa-sized.', tone: 'sand', accent: 'THE DESERT AWAITS' },
-  { title: 'John Wick: Chapter 4', year: '2023', genre: 'Trending Action', runtime: '2h 49m', note: 'For a little late-night adrenaline.', tone: 'steel', accent: 'ONE LAST ROUND' },
-  { title: 'Everything Everywhere All at Once', year: '2022', genre: 'Trending Action', runtime: '2h 19m', note: 'A multiverse of feelings.', tone: 'violet', accent: 'ALL AT ONCE' },
-  { title: 'The Old Guard', year: '2020', genre: 'Trending Action', runtime: '2h 5m', note: 'One more for the action queue.', tone: 'red', accent: 'IMMORTAL, TOGETHER' },
-  { title: 'The Night Agent', year: '2023', genre: 'Trending Action', runtime: '10 episodes', note: 'A twisty, one-more-episode night.', tone: 'steel', accent: 'THE LINE BETWEEN', kind: 'Series' },
-  { title: 'The Others', year: '2001', genre: 'Cozy Horror', runtime: '1h 44m', note: 'A blanket-worthy kind of spooky.', tone: 'mist', accent: 'KEEP THE LIGHTS LOW' },
-  { title: 'A Quiet Place', year: '2018', genre: 'Cozy Horror', runtime: '1h 30m', note: 'The best excuse to stay close.', tone: 'forest', accent: 'LISTEN CLOSELY' },
-  { title: 'The Witch', year: '2015', genre: 'Cozy Horror', runtime: '1h 32m', note: 'Folklore, candlelight, and dread.', tone: 'moss', accent: 'A NEW ENGLAND FOLKTALE' },
-  { title: 'Coraline', year: '2009', genre: 'Cozy Horror', runtime: '1h 40m', note: 'A curious little world after dark.', tone: 'indigo', accent: 'BE CAREFUL WHAT YOU WISH FOR' },
-  { title: 'Midnight Mass', year: '2021', genre: 'Cozy Horror', runtime: '7 episodes', note: 'A quiet island with a strange new miracle.', tone: 'mist', accent: 'A MIRACLE ON CROCKETT ISLAND', kind: 'Series' },
-]
+type CatalogResponse = { items: CatalogMovie[]; safeMode: boolean }
 
-const categories = ['All picks', 'Romantic Comedies', 'Trending Action', 'Cozy Horror', 'Custom URL Stream'] as const
-type CategoryFilter = (typeof categories)[number]
+async function loadCatalog(url: string): Promise<CatalogResponse> {
+  const response = await fetch(url)
+  const body = await response.json()
+  if (!response.ok) throw new Error(typeof body.error === 'string' ? body.error : 'The catalog is temporarily unavailable.')
+  return body as CatalogResponse
+}
 
-export function MoviesSection() {
+function getYouTubeVideoId(value: string) {
+  try {
+    const url = new URL(value)
+    const host = url.hostname.toLowerCase()
+    const id = host === 'youtu.be'
+      ? url.pathname.split('/').filter(Boolean)[0]
+      : url.searchParams.get('v') || url.pathname.match(/^\/(?:embed|shorts)\/([A-Za-z0-9_-]{11})/)?.[1]
+    return id && /^[A-Za-z0-9_-]{11}$/.test(id) ? id : null
+  } catch {
+    return null
+  }
+}
+
+function isDirectVideo(value: string) {
+  try {
+    return /\.(mp4|webm|ogg)$/i.test(new URL(value).pathname)
+  } catch {
+    return false
+  }
+}
+
+export function MoviesSection({ roomId, userId }: { roomId: string; userId: string }) {
   const [query, setQuery] = useState('')
+  const [apiQuery, setApiQuery] = useState('')
   const [category, setCategory] = useState<CategoryFilter>('All picks')
-  const [featuredMovie, setFeaturedMovie] = useState<Movie>(movies[0])
   const [watchlist, setWatchlist] = useState<string[]>([])
+  const [watchlistReady, setWatchlistReady] = useState(false)
   const [streamInput, setStreamInput] = useState('')
-  const [streamUrl, setStreamUrl] = useState('')
   const [streamError, setStreamError] = useState('')
-  const [syncEnabled, setSyncEnabled] = useState(true)
   const [muted, setMuted] = useState(true)
+  const [safeMode, setSafeMode] = useState(true)
+  const videoRef = useRef<HTMLVideoElement>(null)
+  const remoteVideoCommand = useRef(false)
+  const lastProgressWrite = useRef(0)
 
-  const visibleMovies = useMemo(() => movies.filter((movie) => {
-    const matchesQuery = `${movie.title} ${movie.genre} ${movie.kind ?? 'Film'} ${movie.note}`.toLowerCase().includes(query.toLowerCase())
-    const matchesCategory = category === 'All picks' || category === 'Custom URL Stream' || movie.genre === category
-    return matchesQuery && matchesCategory
-  }), [category, query])
+  const { data: mediaState, mutate: mutateMediaState } = useSWR<LoungeMediaState>(
+    ['lounge-media-state', roomId],
+    () => getLoungeMediaState(roomId),
+    { refreshInterval: 2500, revalidateOnFocus: true, shouldRetryOnError: false },
+  )
 
-  const isDirectVideo = /\\.(mp4|webm|ogg)(\\?.*)?$/i.test(streamUrl)
+  useEffect(() => {
+    const timer = window.setTimeout(() => setApiQuery(query.trim()), 300)
+    return () => window.clearTimeout(timer)
+  }, [query])
+
+  useEffect(() => {
+    try {
+      const stored = window.localStorage.getItem(`lounge-watchlist:${roomId}`)
+      const parsed: unknown = stored ? JSON.parse(stored) : []
+      if (Array.isArray(parsed)) setWatchlist(parsed.filter((item): item is string => typeof item === 'string').slice(0, 100))
+    } catch {
+      setWatchlist([])
+    } finally {
+      setWatchlistReady(true)
+    }
+  }, [roomId])
+
+  useEffect(() => {
+    if (!watchlistReady) return
+    try {
+      window.localStorage.setItem(`lounge-watchlist:${roomId}`, JSON.stringify(watchlist))
+    } catch {
+      // The shortlist remains usable for this visit if browser storage is unavailable.
+    }
+  }, [roomId, watchlist, watchlistReady])
 
   useEffect(() => {
     function focusMovieSearch(event: KeyboardEvent) {
@@ -52,25 +99,108 @@ export function MoviesSection() {
       event.preventDefault()
       document.querySelector<HTMLInputElement>('[aria-label="Search movies and shows"]')?.focus()
     }
-
     window.addEventListener('keydown', focusMovieSearch)
     return () => window.removeEventListener('keydown', focusMovieSearch)
   }, [])
 
-  function submitStream(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    setStreamError('')
+  const catalogUrl = category === 'Custom URL Stream'
+    ? null
+    : `/api/movies?category=${categoryApiKeys[category]}&safe=${safeMode}&query=${encodeURIComponent(apiQuery)}`
+  const { data: catalog, error: catalogError, isLoading: catalogLoading } = useSWR(catalogUrl, loadCatalog, {
+    dedupingInterval: 60_000,
+    keepPreviousData: true,
+    shouldRetryOnError: false,
+  })
+
+  const movies = useMemo(() => catalog?.items ?? [], [catalog?.items])
+  const selectedMovie = mediaState?.selected ?? null
+  const streamUrl = mediaState?.streamUrl ?? ''
+  const syncEnabled = mediaState?.syncEnabled ?? true
+  const directVideo = isDirectVideo(streamUrl)
+  const youtubeVideoId = getYouTubeVideoId(streamUrl)
+  const supportsSync = directVideo || Boolean(youtubeVideoId)
+  const savedMovieId = selectedMovie ? `${selectedMovie.mediaType}:${selectedMovie.id}` : ''
+
+  async function updateSharedMedia(patch: Partial<LoungeMediaState>) {
+    const updated = await updateLoungeMediaState(roomId, patch)
+    await mutateMediaState(updated, false)
+    return updated
+  }
+
+  async function selectMovie(movie: CatalogMovie) {
     try {
-      const parsed = new URL(streamInput.trim())
-      if (parsed.protocol !== 'https:') throw new Error('Use a secure HTTPS video or embed link.')
-      setStreamUrl(parsed.toString())
+      await updateSharedMedia({ selected: movie })
+      document.getElementById('featured-player')?.scrollIntoView({ behavior: 'smooth', block: 'center' })
     } catch {
-      setStreamError('Paste a valid HTTPS video or embed URL from a service you can access.')
+      setStreamError('That title could not be shared. Refresh the lounge and try again.')
     }
   }
 
-  function addToWatchlist(title: string) {
-    setWatchlist((current) => current.includes(title) ? current.filter((item) => item !== title) : [...current, title])
+  async function submitStream(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    setStreamError('')
+    try {
+      const updated = await updateSharedMedia({ streamUrl: streamInput.trim(), currentTime: 0, isPlaying: false })
+      setStreamInput(updated.streamUrl)
+    } catch (error) {
+      setStreamError(error instanceof Error ? error.message : 'Use a secure YouTube, Vimeo, or direct video link you can access.')
+    }
+  }
+
+  async function publishPlayback(patch: Partial<Pick<LoungeMediaState, 'isPlaying' | 'currentTime'>>) {
+    if (!syncEnabled) return
+    try {
+      await updateSharedMedia(patch)
+    } catch {
+      setStreamError('Playback could not be synced. Check your connection and try again.')
+    }
+  }
+
+  async function toggleSync() {
+    try {
+      await updateSharedMedia({ syncEnabled: !syncEnabled })
+    } catch {
+      setStreamError('The sync setting could not be changed.')
+    }
+  }
+
+  async function toggleWatchlist(movie: CatalogMovie) {
+    const key = `${movie.mediaType}:${movie.id}`
+    setWatchlist((current) => current.includes(key) ? current.filter((item) => item !== key) : [...current, key])
+  }
+
+  function applyRemoteVideoState(video: HTMLVideoElement) {
+    if (!syncEnabled || !mediaState || mediaState.version < 1 || mediaState.updatedByUserId === userId) return
+    remoteVideoCommand.current = true
+    try {
+      if (Math.abs(video.currentTime - mediaState.currentTime) > 2) video.currentTime = mediaState.currentTime
+      if (mediaState.isPlaying && video.paused) void video.play().catch(() => undefined)
+      if (!mediaState.isPlaying && !video.paused) video.pause()
+    } catch {
+      // Playback may not be ready until the video metadata has loaded.
+    }
+    window.setTimeout(() => { remoteVideoCommand.current = false }, 1000)
+  }
+
+  useEffect(() => {
+    const video = videoRef.current
+    if (!video || !directVideo || !mediaState) return
+    applyRemoteVideoState(video)
+  }, [directVideo, mediaState?.version, mediaState?.currentTime, mediaState?.isPlaying, mediaState?.updatedByUserId, syncEnabled, userId])
+
+  function handleVideoPlay(event: React.SyntheticEvent<HTMLVideoElement>) {
+    if (!remoteVideoCommand.current) void publishPlayback({ isPlaying: true, currentTime: event.currentTarget.currentTime })
+  }
+
+  function handleVideoPause(event: React.SyntheticEvent<HTMLVideoElement>) {
+    if (!remoteVideoCommand.current) void publishPlayback({ isPlaying: false, currentTime: event.currentTarget.currentTime })
+  }
+
+  function handleVideoTimeUpdate(event: React.SyntheticEvent<HTMLVideoElement>) {
+    const now = Date.now()
+    if (remoteVideoCommand.current || !syncEnabled || mediaState?.updatedByUserId !== userId || now - lastProgressWrite.current < 4000) return
+    lastProgressWrite.current = now
+    void publishPlayback({ currentTime: event.currentTarget.currentTime })
   }
 
   return (
@@ -85,76 +215,109 @@ export function MoviesSection() {
       </div>
 
       <section className="watch-party-hero" aria-label="Featured watch party">
-        <div className="hero-art" />
+        <div className="hero-art" style={selectedMovie?.backdropUrl ? { backgroundImage: `linear-gradient(90deg,#151216f2 0%,#19151bdc 43%,#19141928 100%),linear-gradient(0deg,#15121688,transparent 60%),url("${selectedMovie.backdropUrl}")` } : undefined} />
         <div className="hero-topline"><span className="live-pill"><span /> TONIGHT’S WATCH PARTY</span><span className="hero-private"><ShieldCheck size={13} /> Just us</span></div>
         <div className="hero-copy">
           <p className="hero-kicker">THE COUCH IS CALLING</p>
-          <h2>One more episode.<br /><em>Or maybe a movie.</em></h2>
-          <p className="hero-description">Our watch party is ready when you are. Find a stream you can access and settle in together.</p>
+          <h2>{selectedMovie ? selectedMovie.title : <>One more episode.<br /><em>Or maybe a movie.</em></>}</h2>
+          <p className="hero-description">{selectedMovie?.overview || 'Our watch party is ready when you are. Find a stream you can access and settle in together.'}</p>
           <a className="hero-cta" href="#featured-player"><Play size={14} fill="currentColor" /> Set up our movie night <ArrowDown size={14} /></a>
         </div>
-        <div className="hero-bottom-note"><span className="avatar-pair"><i>Z</i><i>K</i></span><span>Two seats saved, always.</span><span className="hero-sparkle"><Sparkles size={15} /></span></div>
+        <div className="hero-bottom-note"><span className="avatar-pair"><i>Z</i><i>A</i></span><span>Two seats saved, always.</span><span className="hero-sparkle"><Sparkles size={15} /></span></div>
       </section>
 
       <section className="player-section" id="featured-player">
-        <div className="section-label-row"><div><p className="eyebrow">FEATURED WATCH PARTY</p><h2>{streamUrl ? featuredMovie.title : 'Your screen, together'}</h2></div><span className="player-status"><span /> {streamUrl ? 'Stream ready' : 'Waiting for a link'}</span></div>
+        <div className="section-label-row"><div><p className="eyebrow">FEATURED WATCH PARTY</p><h2>{selectedMovie?.title || 'Your screen, together'}</h2></div><span className="player-status"><span /> {streamUrl ? 'Shared stream ready' : 'Waiting for a link'}</span></div>
         <div className={`player-frame ${streamUrl ? 'player-frame-active' : ''}`}>
-          {streamUrl ? (
-            isDirectVideo ? <video className="player-content" src={streamUrl} controls playsInline muted={muted} /> : <iframe className="player-content" src={streamUrl} title={`Watch ${featuredMovie.title} together`} allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowFullScreen referrerPolicy="no-referrer" sandbox="allow-scripts allow-presentation allow-forms" />
+          {directVideo ? (
+            <video
+              className="player-content"
+              onLoadedMetadata={(event) => applyRemoteVideoState(event.currentTarget)}
+              onPause={handleVideoPause}
+              onPlay={handleVideoPlay}
+              onTimeUpdate={handleVideoTimeUpdate}
+              playsInline
+              ref={videoRef}
+              src={streamUrl}
+              controls
+              muted={muted}
+            />
+          ) : youtubeVideoId ? (
+            <YouTubePlayer
+              key={youtubeVideoId}
+              videoId={youtubeVideoId}
+              state={mediaState ?? { selected: null, streamUrl: '', currentTime: 0, isPlaying: false, syncEnabled: true, updatedByUserId: null, version: 0, updatedAt: null }}
+              syncEnabled={syncEnabled}
+              userId={userId}
+              muted={muted}
+              onPlayback={publishPlayback}
+            />
+          ) : streamUrl ? (
+            <iframe className="player-content" src={streamUrl} title={`Watch ${selectedMovie?.title || 'together'}`} allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowFullScreen referrerPolicy="strict-origin-when-cross-origin" sandbox="allow-scripts allow-same-origin allow-presentation allow-forms" />
           ) : (
             <div className="player-empty">
               <div className="player-play-mark"><Play size={19} fill="currentColor" /></div>
               <p className="player-empty-title">Ready when you are.</p>
-              <p>Paste a link to a video or an embed you’re allowed to watch.</p>
+              <p>Paste a link from a service you can access, and it will be shared with your room.</p>
             </div>
           )}
           <div className="player-corner-label"><Clapperboard size={13} /> OUR SCREEN</div>
         </div>
         <div className="player-controls">
           <div className="player-controls-left">
-            <button className={`sync-toggle ${syncEnabled ? 'sync-toggle-on' : ''}`} onClick={() => setSyncEnabled((on) => !on)} aria-pressed={syncEnabled}><span className="sync-dot" /> {syncEnabled ? 'Watch together sync on' : 'Sync paused'}</button>
+            <button className={`sync-toggle ${syncEnabled ? 'sync-toggle-on' : ''}`} onClick={toggleSync} aria-pressed={syncEnabled} disabled={!supportsSync && Boolean(streamUrl)}><span className="sync-dot" /> {syncEnabled && supportsSync ? 'Watch together sync on' : supportsSync ? 'Sync paused' : streamUrl ? 'Source shared · controls local' : 'Sync ready for YouTube or video'}</button>
             <span className="control-separator" />
-            <span className="player-control-note"><Clock3 size={14} /> {streamUrl ? 'You’re in the same room' : 'Waiting for a stream'}</span>
+            <span className="player-control-note"><Clock3 size={14} /> {mediaState?.isPlaying ? 'Playing together' : streamUrl ? 'Waiting for play' : 'Waiting for a stream'}</span>
           </div>
           <div className="player-controls-right">
-            <button className="icon-control" onClick={() => setMuted((value) => !value)} aria-label={muted ? 'Unmute video' : 'Mute video'}>{muted ? <VolumeX size={15} /> : <Volume2 size={15} />}</button>
-            <button className="icon-control" onClick={() => setSyncEnabled((on) => !on)} aria-label="Toggle watch sync"><ExternalLink size={15} /></button>
+            <button className="icon-control" onClick={() => setMuted((value) => !value)} aria-label={supportsSync ? muted ? 'Unmute video' : 'Mute video' : 'Volume control is unavailable for this player'} disabled={!supportsSync}>{muted ? <VolumeX size={15} /> : <Volume2 size={15} />}</button>
+            <span className="player-control-note">{mediaState?.currentTime ? `${Math.floor(mediaState.currentTime / 60)}:${String(Math.floor(mediaState.currentTime % 60)).padStart(2, '0')}` : '00:00'}</span>
           </div>
         </div>
         <form className="stream-form" onSubmit={submitStream}>
-          <div className="stream-input-wrap"><Link2 size={15} /><input aria-label="Video or embed URL" placeholder="Paste an authorized HTTPS video or embed URL" value={streamInput} onChange={(event) => setStreamInput(event.target.value)} /><button className="stream-submit" type="submit"><span>Load stream</span><ArrowRight size={14} /></button></div>
+          <div className="stream-input-wrap"><Link2 size={15} /><input aria-label="Video or embed URL" placeholder="Paste a YouTube, Vimeo, or authorized video URL" value={streamInput} onChange={(event) => setStreamInput(event.target.value)} /><button className="stream-submit" type="submit"><span>Share stream</span><ArrowRight size={14} /></button></div>
           {streamError ? <p className="inline-error" role="alert">{streamError}</p> : null}
-          {streamUrl ? <p className="stream-note"><Info size={13} /> Only load streams you have permission to access. External players may have their own controls and policies.</p> : null}
+          {streamUrl ? <p className="stream-note"><Info size={13} /> Shared with both seats. Use a service or video file you have permission to watch; only YouTube, Vimeo, and secure video files are supported.</p> : null}
         </form>
       </section>
 
       <section className="browse-section">
         <div className="browse-header">
           <div><p className="eyebrow">OUR LITTLE SHORTLIST</p><h2>What are we in the mood for?</h2></div>
-          <label className="movie-search"><Search size={15} /><input aria-label="Search movies and shows" placeholder="Search our picks…" value={query} onChange={(event) => setQuery(event.target.value)} /><kbd>⌘ K</kbd></label>
+          <div className="browse-controls">
+            <label className="movie-search"><Search size={15} /><input aria-label="Search movies and shows" placeholder="Search TMDB…" value={query} onChange={(event) => setQuery(event.target.value)} /><kbd>⌘ K</kbd></label>
+            <button className={`content-filter ${safeMode ? 'content-filter-active' : ''}`} onClick={() => setSafeMode((enabled) => !enabled)} aria-pressed={safeMode}><ShieldCheck size={13} /> {safeMode ? 'Hide 18+' : 'Show all ratings'}</button>
+          </div>
         </div>
         <div className="category-tabs" role="tablist" aria-label="Movie categories">
           {categories.map((item) => <button key={item} role="tab" aria-selected={category === item} className={category === item ? 'category-active' : ''} onClick={() => setCategory(item)}>{item === 'Custom URL Stream' ? <Link2 size={13} /> : null}{item}</button>)}
         </div>
         {category === 'Custom URL Stream' ? (
-          <div className="custom-stream-card"><div className="custom-stream-icon"><Link2 size={18} /></div><div><strong>Bring your own stream</strong><p>Paste a secure link from a video service you’re allowed to use. It’ll open in the shared player above.</p></div><button onClick={() => document.getElementById('featured-player')?.scrollIntoView({ behavior: 'smooth', block: 'center' })}>Add a link <ArrowRight size={14} /></button></div>
+          <div className="custom-stream-card"><div className="custom-stream-icon"><Link2 size={18} /></div><div><strong>Bring your own stream</strong><p>Share an authorized YouTube, Vimeo, or secure video file link with your room.</p></div><button onClick={() => document.getElementById('featured-player')?.scrollIntoView({ behavior: 'smooth', block: 'center' })}>Add a link <ArrowRight size={14} /></button></div>
         ) : null}
+        {catalogError ? <p className="catalog-error" role="alert">{catalogError.message}</p> : null}
+        {catalogLoading && !catalog ? <div className="catalog-loading" role="status"><LoaderCircle size={17} className="spin" /><span>Finding tonight’s picks…</span></div> : null}
         <div className="movie-grid">
-          {visibleMovies.map((movie) => {
-            const saved = watchlist.includes(movie.title)
+          {movies.map((movie) => {
+            const saved = watchlist.includes(`${movie.mediaType}:${movie.id}`)
+            const selected = savedMovieId === `${movie.mediaType}:${movie.id}`
             return (
-              <article className={`movie-card movie-tone-${movie.tone}`} key={movie.title}>
-                <button className="movie-art" onClick={() => { setFeaturedMovie(movie); document.getElementById('featured-player')?.scrollIntoView({ behavior: 'smooth', block: 'center' }) }} aria-label={`Set ${movie.title} as tonight’s pick`}>
-                  <span className="poster-stars" aria-hidden="true">✳ <i>✧</i></span><span className="poster-wordmark">{movie.accent}</span><strong>{movie.title}</strong><span className="poster-year">{movie.year} <b>·</b> {movie.runtime}</span>
+              <article className="movie-card" key={`${movie.mediaType}:${movie.id}`}>
+                <button className={`movie-art ${selected ? 'movie-art-selected' : ''}`} onClick={() => void selectMovie(movie)} aria-label={`Set ${movie.title} as tonight’s pick`}>
+                  {movie.posterUrl ? <img src={movie.posterUrl} alt="" loading="lazy" decoding="async" /> : <span className="poster-fallback" aria-hidden="true"><Clapperboard size={22} /></span>}
+                  <span className="poster-wordmark">{movie.mediaType === 'tv' ? 'SERIES' : 'TONIGHT’S PICK'}</span>
+                  <strong>{movie.title}</strong>
+                  <span className="poster-year">{movie.year}{movie.genres[0] ? <><b> · </b>{movie.genres[0]}</> : null}</span>
                   <span className="poster-play"><Play size={13} fill="currentColor" /></span>
+                  {movie.certification ? <span className="poster-rating">{movie.certification}</span> : null}
                 </button>
-                <div className="movie-card-meta"><div><span className="movie-genre">{movie.kind === 'Series' ? 'Series · ' : ''}{movie.genre}</span><p>{movie.note}</p></div><button className={`watchlist-button ${saved ? 'watchlist-saved' : ''}`} onClick={() => addToWatchlist(movie.title)} aria-label={saved ? `Remove ${movie.title} from watchlist` : `Add ${movie.title} to watchlist`} aria-pressed={saved}>{saved ? <Check size={15} /> : <Plus size={15} />}</button></div>
+                <div className="movie-card-meta"><div><span className="movie-genre">{movie.mediaType === 'tv' ? 'Series' : movie.genres.slice(0, 2).join(' · ') || 'Film'}{movie.voteAverage ? ` · ★ ${movie.voteAverage}` : ''}</span><p>{movie.overview}</p></div><button className={`watchlist-button ${saved ? 'watchlist-saved' : ''}`} onClick={() => void toggleWatchlist(movie)} aria-label={saved ? `Remove ${movie.title} from watchlist` : `Add ${movie.title} to watchlist`} aria-pressed={saved}>{saved ? <Check size={15} /> : <Plus size={15} />}</button></div>
               </article>
             )
           })}
         </div>
-        {visibleMovies.length === 0 ? <div className="empty-search"><Search size={18} /><p>No picks match that search. Try another title or mood.</p></div> : null}
-        <p className="catalog-note"><Info size={13} /> A hand-picked sample of films and series. Search is local and doesn’t require a TMDB account.</p>
+        {!catalogLoading && !catalogError && movies.length === 0 && category !== 'Custom URL Stream' ? <div className="empty-search"><Search size={18} /><p>No picks match that search. Try another title or rating filter.</p></div> : null}
+        <p className="catalog-note"><Info size={13} /> This product uses the TMDB API but is not endorsed or certified by TMDB. Safe mode hides titles rated above PG-13 / TV-14.</p>
       </section>
     </section>
   )

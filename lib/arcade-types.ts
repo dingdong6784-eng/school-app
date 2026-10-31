@@ -1,4 +1,4 @@
-export const gameIds = ['uno', 'chess', 'speed', 'crazy', 'connect', 'tic', 'memory'] as const
+export const gameIds = ['uno', 'chess', 'speed', 'crazy', 'connect', 'tic', 'memory', 'battleship'] as const
 
 export type GameId = (typeof gameIds)[number]
 export type PlayerSeat = 'Z' | 'A'
@@ -75,7 +75,17 @@ export type MemoryView = {
   lastAction: string
 }
 
-export type GameViewState = UnoView | ChessView | SpeedView | CrazyView | ConnectView | TicView | MemoryView
+export type BattleshipView = {
+  ownShips: number[]
+  incomingShots: number[]
+  shots: number[]
+  hits: number[]
+  turn: PlayerSeat
+  winner: Winner
+  lastAction: string
+}
+
+export type GameViewState = UnoView | ChessView | SpeedView | CrazyView | ConnectView | TicView | MemoryView | BattleshipView
 
 export type GameAction =
   | { type: 'play-card'; cardId: number; color?: UnoColor; suit?: CardSuit }
@@ -85,6 +95,7 @@ export type GameAction =
   | { type: 'place'; index: number }
   | { type: 'flip'; cardId: number }
   | { type: 'finish-mismatch' }
+  | { type: 'fire'; cell: number }
 
 export function otherSeat(seat: PlayerSeat): PlayerSeat {
   return seat === 'Z' ? 'A' : 'Z'

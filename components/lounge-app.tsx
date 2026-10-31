@@ -150,7 +150,7 @@ function AuthenticatedLounge({ user, invitationToken }: { user: LoungeUser; invi
               {room.isOwner && room.members.length < 2 ? <div className="room-invite-actions"><button className="room-invite-button" onClick={handleShareInvite} disabled={busy}><Copy size={14} />{busy ? 'Preparing…' : 'Share invite'}</button>{inviteUrl ? <input className="room-invite-url" value={inviteUrl} readOnly aria-label="Private room invitation link" onFocus={(event) => event.currentTarget.select()} /> : null}</div> : null}
             </section>
             {notice ? <p className="room-notice" role="status">{notice}{inviteUrl ? <Check size={13} /> : null}</p> : null}
-            <div className="page-content">{tab === 'movies' ? <MoviesSection /> : <GamesArcade roomId={room.id} userId={user.id} playerSeat={room.currentSeat} />}</div>
+            <div className="page-content">{tab === 'movies' ? <MoviesSection roomId={room.id} userId={user.id} /> : <GamesArcade roomId={room.id} userId={user.id} playerSeat={room.currentSeat} />}</div>
             <footer className="site-footer"><span><Sparkles size={13} /> A little corner of the internet, made for two.</span><span>Made with love <Heart size={12} fill="currentColor" /></span></footer>
           </div>
           <button className={`chat-trigger lounge-chat-trigger ${chatOpen ? 'chat-trigger-active' : ''}`} onClick={() => setChatOpen((open) => !open)} aria-expanded={chatOpen} aria-controls="live-chat-drawer"><MessageCircle size={16} /><span>Live chat</span><span className="online-dot" aria-label="Chat is live" /></button>
