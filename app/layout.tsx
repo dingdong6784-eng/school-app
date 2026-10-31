@@ -5,7 +5,7 @@ import './lounge-live.css'
 
 export const metadata: Metadata = {
   title: 'Z & A Lounge — Our Private Little World',
-  description: 'A private movie night, game table, and little corner of the internet for two.',
+  description: 'Preview Z & A Lounge’s movie shortlist and watch-party interface. Private rooms, invitations, chat, and games require sign-in.',
   applicationName: 'Z & A Lounge',
   generator: 'v0.app',
   icons: {

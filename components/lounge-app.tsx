@@ -3,7 +3,6 @@
 import { useState } from 'react'
 import useSWR from 'swr'
 import { Check, Copy, Film, Gamepad2, Heart, LoaderCircle, LockKeyhole, LogOut, MessageCircle, Sparkles, Users } from 'lucide-react'
-import { AccessGate } from '@/components/access-gate'
 import { GamesArcade } from '@/components/games-arcade'
 import { LiveChatDrawer } from '@/components/live-chat'
 import { MoviesSection } from '@/components/movies-section'
@@ -16,8 +15,32 @@ type LoungeUser = { id: string; email: string; name: string }
 type RoomSnapshot = NonNullable<Awaited<ReturnType<typeof getMyRoom>>>
 
 export function LoungeApp({ user, invitationToken }: { user: LoungeUser | null; invitationToken: string }) {
-  if (!user) return <AccessGate invitationPending={Boolean(invitationToken)} />
+  if (!user) return <DemoLounge invitationPending={Boolean(invitationToken)} />
   return <AuthenticatedLounge user={user} invitationToken={invitationToken} />
+}
+
+function DemoLounge({ invitationPending }: { invitationPending: boolean }) {
+  return (
+    <main className="lounge-app">
+      <div className="lounge-shell lounge-shell-ready">
+        <header className="topbar">
+          <a className="brand-lockup" href="#home" aria-label="Z and A Lounge home">
+            <span className="brand-emblem"><Heart fill="currentColor" /></span>
+            <span className="brand-copy"><strong>Z <i>&amp;</i> A</strong><small>THE LOUNGE</small></span>
+          </a>
+          <div className="demo-mode-label"><Sparkles size={14} /> Demo preview</div>
+        </header>
+        <div className="page-frame">
+          <aside className="demo-mode-notice" aria-label="Demo mode information">
+            <Sparkles size={15} aria-hidden="true" />
+            <p>{invitationPending ? 'You’re viewing demo mode. Room invitations can’t be accepted right now.' : 'You’re viewing demo mode. Private rooms, invitations, chat, and games are temporarily unavailable.'}</p>
+          </aside>
+          <div className="page-content"><MoviesSection /></div>
+          <footer className="site-footer"><span><Sparkles size={13} /> A little corner of the internet, made for two.</span><span>Demo preview <Heart size={12} fill="currentColor" /></span></footer>
+        </div>
+      </div>
+    </main>
+  )
 }
 
 function AuthenticatedLounge({ user, invitationToken }: { user: LoungeUser; invitationToken: string }) {
