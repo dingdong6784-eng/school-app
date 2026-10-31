@@ -1,0 +1,2 @@
+[functions.lounge]
+verify_jwt = false
