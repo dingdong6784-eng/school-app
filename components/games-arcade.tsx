@@ -17,6 +17,7 @@ const gameOptions: GameOption[] = [
   { id: 'connect', name: 'Connect Four', kicker: 'Four in a row', icon: '●', rules: 'Take turns dropping a disc into a column. Connect four horizontally, vertically, or diagonally to win.' },
   { id: 'tic', name: 'Tic-Tac-Toe', kicker: 'Glow edition', icon: '×', rules: 'Take turns marking a square. Connect three in a row, column, or diagonal to win.' },
   { id: 'memory', name: 'Memory Match', kicker: 'Made for two', icon: '✦', rules: 'Reveal two cards on your turn. Matching pairs score and let you play again; most pairs wins.' },
+  { id: 'battleship', name: 'Battleship', kicker: 'Find the fleet', icon: '▦', rules: 'Take turns calling a coordinate. First to find all 17 hidden ship spaces wins; each player sees only their own fleet.' },
 ]
 const suitGlyph: Record<CardSuit, string> = { hearts: '♥', diamonds: '♦', clubs: '♣', spades: '♠' }
 const chessSymbols: Record<string, string> = { wk: '♔', wq: '♕', wr: '♖', wb: '♗', wn: '♘', wp: '♙', bk: '♚', bq: '♛', br: '♜', bb: '♝', bn: '♞', bp: '♟' }
@@ -143,6 +144,7 @@ function GamePanel({ gameId, roomId, userId, playerSeat }: { gameId: GameId; roo
       {gameId === 'connect' ? <ConnectTable state={state as Extract<GameViewState, { board: Array<PlayerSeat | null> }>} playerSeat={playerSeat} busy={busy} onAction={perform} /> : null}
       {gameId === 'tic' ? <TicTable state={state as Extract<GameViewState, { marks: Record<PlayerSeat, 'X' | 'O'> }>} playerSeat={playerSeat} busy={busy} onAction={perform} /> : null}
       {gameId === 'memory' ? <MemoryTable state={state as Extract<GameViewState, { cards: unknown[] }>} playerSeat={playerSeat} busy={busy} onAction={perform} /> : null}
+      {gameId === 'battleship' ? <BattleshipTable state={state as Extract<GameViewState, { ownShips: number[] }>} playerSeat={playerSeat} busy={busy} onAction={perform} /> : null}
     </section>
   )
 }
@@ -219,6 +221,41 @@ function ConnectTable({ state, playerSeat, busy, onAction }: { state: Extract<Ga
 
 function TicTable({ state, playerSeat, busy, onAction }: { state: Extract<GameViewState, { marks: Record<PlayerSeat, 'X' | 'O'> }>; playerSeat: PlayerSeat; busy: boolean; onAction: (action: GameAction) => void }) {
   return <div className="live-game-board live-tic-board">{state.board.map((mark, index) => <button key={index} type="button" className={`live-tic-cell ${mark === 'O' ? 'mark-o' : ''}`} onClick={() => onAction({ type: 'place', index })} disabled={busy || state.turn !== playerSeat || Boolean(state.winner) || Boolean(mark)} aria-label={mark ? `${mark} at square ${index + 1}` : `Place your mark at square ${index + 1}`}>{mark}</button>)}</div>
+}
+
+function BattleshipTable({ state, playerSeat, busy, onAction }: { state: Extract<GameViewState, { ownShips: number[] }>; playerSeat: PlayerSeat; busy: boolean; onAction: (action: GameAction) => void }) {
+  const letters = 'ABCDEFGHIJ'
+  const ownShips = new Set(state.ownShips)
+  const incomingShots = new Set(state.incomingShots)
+  const shots = new Set(state.shots)
+  const hits = new Set(state.hits)
+
+  function renderBoard(board: 'fleet' | 'target') {
+    return <div className="live-battleship-board" aria-label={board === 'fleet' ? 'Your fleet and incoming shots' : 'Opponent waters and your shots'}>
+      <div className="live-battleship-header"><span />{letters.split('').map((letter) => <span key={letter}>{letter}</span>)}</div>
+      {Array.from({ length: 10 }, (_, row) => <div className="live-battleship-row" key={row}>
+        <span className="live-battleship-coordinate">{row + 1}</span>
+        <div className="live-battleship-cells">{Array.from({ length: 10 }, (_, column) => {
+          const cell = row * 10 + column
+          if (board === 'fleet') {
+            const ship = ownShips.has(cell)
+            const shot = incomingShots.has(cell)
+            const hit = shot && ship
+            return <span key={cell} className={`live-battleship-cell ${ship && !shot ? 'ship' : ''} ${hit ? 'hit' : ''} ${shot && !ship ? 'miss' : ''}`} aria-label={`${letters[column]}${row + 1}${hit ? ', ship hit' : shot ? ', missed' : ship ? ', ship' : ', open'}`} />
+          }
+          const fired = shots.has(cell)
+          const hit = hits.has(cell)
+          return <button key={cell} type="button" className={`live-battleship-cell ${hit ? 'hit' : fired ? 'miss' : ''}`} disabled={busy || state.turn !== playerSeat || Boolean(state.winner) || fired} onClick={() => onAction({ type: 'fire', cell })} aria-label={`Target ${letters[column]}${row + 1}${hit ? ', hit' : fired ? ', miss' : ''}`} />
+        })}</div>
+      </div>)}
+    </div>
+  }
+
+  return <div className="live-battleship-layout">
+    <div className="live-battleship-panel"><div className="live-battleship-title"><strong>Opponent waters</strong><span>{state.turn === playerSeat && !state.winner ? 'Choose a target' : 'Wait for your turn'}</span></div>{renderBoard('target')}</div>
+    <div className="live-battleship-panel"><div className="live-battleship-title"><strong>Your fleet</strong><span>Ships are private to your seat</span></div>{renderBoard('fleet')}</div>
+    <div className="live-battleship-legend"><span><i className="ship" /> Your ship</span><span><i className="miss" /> Miss</span><span><i className="hit" /> Hit</span></div>
+  </div>
 }
 
 function MemoryTable({ state, playerSeat, busy, onAction }: { state: Extract<GameViewState, { cards: unknown[] }>; playerSeat: PlayerSeat; busy: boolean; onAction: (action: GameAction) => void }) {

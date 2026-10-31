@@ -36,7 +36,12 @@ type MemoryState = CommonState & {
   scores: Record<PlayerSeat, number>
   mismatchAt: number | null
 }
-type GameState = UnoState | CrazyState | SpeedState | ChessState | ConnectState | TicState | MemoryState
+type BattleshipState = CommonState & {
+  ships: Record<PlayerSeat, number[]>
+  shots: Record<PlayerSeat, number[]>
+  hits: Record<PlayerSeat, number[]>
+}
+type GameState = UnoState | CrazyState | SpeedState | ChessState | ConnectState | TicState | MemoryState | BattleshipState
 
 const cardSuits: CardSuit[] = ['hearts', 'diamonds', 'clubs', 'spades']
 const unoColors: UnoColor[] = ['red', 'blue', 'green', 'yellow']
@@ -101,6 +106,36 @@ function createMemory(firstSeat: PlayerSeat): MemoryState {
   return { cards, matched: [], revealed: [], mismatchAt: null, scores: { Z: 0, A: 0 }, turn: firstSeat, winner: null, lastAction: `${firstSeat} turns over two cards first.` }
 }
 
+function createBattleshipFleet() {
+  const occupied = new Set<number>()
+  for (const length of [5, 4, 3, 3, 2]) {
+    let placed = false
+    for (let attempt = 0; attempt < 300 && !placed; attempt += 1) {
+      const horizontal = Math.random() < 0.5
+      const row = Math.floor(Math.random() * 10)
+      const column = Math.floor(Math.random() * 10)
+      if ((horizontal && column + length > 10) || (!horizontal && row + length > 10)) continue
+      const cells = Array.from({ length }, (_, offset) => horizontal ? row * 10 + column + offset : (row + offset) * 10 + column)
+      if (cells.some((cell) => occupied.has(cell))) continue
+      cells.forEach((cell) => occupied.add(cell))
+      placed = true
+    }
+    if (!placed) return createBattleshipFleet()
+  }
+  return [...occupied]
+}
+
+function createBattleship(firstSeat: PlayerSeat): BattleshipState {
+  return {
+    ships: { Z: createBattleshipFleet(), A: createBattleshipFleet() },
+    shots: { Z: [], A: [] },
+    hits: { Z: [], A: [] },
+    turn: firstSeat,
+    winner: null,
+    lastAction: `${firstSeat} fires first. Find all 17 ship spaces to win.`,
+  }
+}
+
 export function createInitialGameState(gameId: GameId, firstSeat: PlayerSeat): GameState {
   switch (gameId) {
     case 'uno': return createUno(firstSeat)
@@ -113,6 +148,7 @@ export function createInitialGameState(gameId: GameId, firstSeat: PlayerSeat): G
       return { board: Array(9).fill(null), marks, turn: firstSeat, winner: null, lastAction: `${firstSeat} plays X and starts.` }
     }
     case 'memory': return createMemory(firstSeat)
+    case 'battleship': return createBattleship(firstSeat)
   }
 }
 
@@ -303,6 +339,24 @@ function applyMemory(state: MemoryState, seat: PlayerSeat, action: GameAction): 
   return { ...state, revealed, mismatchAt: Date.now(), lastAction: `${seat} found no match. The cards will turn back over.` }
 }
 
+function applyBattleship(state: BattleshipState, seat: PlayerSeat, action: GameAction): BattleshipState {
+  if (action.type !== 'fire' || !Number.isInteger(action.cell) || action.cell < 0 || action.cell >= 100) throw new Error('Choose one of the 100 target spaces.')
+  requireTurn(state, seat)
+  if (state.shots[seat].includes(action.cell)) throw new Error('That space has already been targeted.')
+  const shots = { ...state.shots, [seat]: [...state.shots[seat], action.cell] }
+  const hit = state.ships[otherSeat(seat)].includes(action.cell)
+  const hits = { ...state.hits, [seat]: hit ? [...state.hits[seat], action.cell] : state.hits[seat] }
+  const winner: Winner = hits[seat].length === 17 ? seat : null
+  return {
+    ...state,
+    shots,
+    hits,
+    turn: otherSeat(seat),
+    winner,
+    lastAction: winner ? `${seat} sank the fleet and wins.` : `${seat} ${hit ? 'hit a ship' : 'missed'} at ${String.fromCharCode(65 + action.cell % 10)}${Math.floor(action.cell / 10) + 1}.`,
+  }
+}
+
 export function applyGameAction(gameId: GameId, state: GameState, seat: PlayerSeat, action: GameAction): GameState {
   switch (gameId) {
     case 'uno': return applyUno(state as UnoState, seat, action)
@@ -312,6 +366,7 @@ export function applyGameAction(gameId: GameId, state: GameState, seat: PlayerSe
     case 'connect': return applyConnect(state as ConnectState, seat, action)
     case 'tic': return applyTic(state as TicState, seat, action)
     case 'memory': return applyMemory(state as MemoryState, seat, action)
+    case 'battleship': return applyBattleship(state as BattleshipState, seat, action)
   }
 }
 
@@ -341,6 +396,18 @@ export function projectGameState(gameId: GameId, state: GameState, seat: PlayerS
       const cards = current.cards.map((card) => ({ id: card.id, face: visibleIds.has(card.id) ? card.face : null }))
       const { mismatchAt: _mismatchAt, ...publicState } = current
       return { ...publicState, cards } as MemoryView
+    }
+    case 'battleship': {
+      const current = state as BattleshipState
+      return {
+        ownShips: current.ships[seat],
+        incomingShots: current.shots[otherSeat(seat)],
+        shots: current.shots[seat],
+        hits: current.hits[seat],
+        turn: current.turn,
+        winner: current.winner,
+        lastAction: current.lastAction,
+      }
     }
   }
 }

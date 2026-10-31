@@ -2,21 +2,21 @@
 
 import { useState } from 'react'
 import useSWR from 'swr'
-import { Check, Copy, Film, Gamepad2, Heart, LoaderCircle, LockKeyhole, LogOut, MessageCircle, Sparkles, Users } from 'lucide-react'
-import { AccessGate } from '@/components/access-gate'
+import { Check, Copy, Film, Gamepad2, Heart, LoaderCircle, LockKeyhole, MessageCircle, Sparkles, Users } from 'lucide-react'
 import { GamesArcade } from '@/components/games-arcade'
 import { LiveChatDrawer } from '@/components/live-chat'
 import { MoviesSection } from '@/components/movies-section'
 import { createRoom, getMyRoom, joinRoom, rotateRoomInvite } from '@/app/actions/rooms'
-import { authClient } from '@/lib/auth/client'
+import { getPartnerPresence, lockLounge } from '@/app/actions/access'
+import { PasscodeGate } from '@/components/passcode-gate'
 import { otherSeat, type PlayerSeat } from '@/lib/arcade-types'
 
 type HubTab = 'movies' | 'games'
-type LoungeUser = { id: string; email: string; name: string }
+type LoungeUser = { id: string; role: 'host' | 'partner'; name: string }
 type RoomSnapshot = NonNullable<Awaited<ReturnType<typeof getMyRoom>>>
 
 export function LoungeApp({ user, invitationToken }: { user: LoungeUser | null; invitationToken: string }) {
-  if (!user) return <AccessGate invitationPending={Boolean(invitationToken)} />
+  if (!user) return <PasscodeGate invitationPending={Boolean(invitationToken)} />
   return <AuthenticatedLounge user={user} invitationToken={invitationToken} />
 }
 
@@ -26,6 +26,11 @@ function AuthenticatedLounge({ user, invitationToken }: { user: LoungeUser; invi
     () => getMyRoom(),
     { refreshInterval: 3000, revalidateOnFocus: true, shouldRetryOnError: false },
   )
+  const { data: presence } = useSWR(['lounge-presence', user.id], getPartnerPresence, {
+    refreshInterval: 5000,
+    revalidateOnFocus: true,
+    shouldRetryOnError: false,
+  })
   const [tab, setTab] = useState<HubTab>('movies')
   const [selectedSeat, setSelectedSeat] = useState<PlayerSeat>('Z')
   const [busy, setBusy] = useState(false)
@@ -90,7 +95,7 @@ function AuthenticatedLounge({ user, invitationToken }: { user: LoungeUser; invi
   async function handleSignOut() {
     setBusy(true)
     try {
-      await authClient.signOut()
+      await lockLounge()
       window.location.replace('/')
     } finally {
       setBusy(false)
@@ -126,8 +131,9 @@ function AuthenticatedLounge({ user, invitationToken }: { user: LoungeUser; invi
             <button className={`nav-tab ${tab === 'games' ? 'nav-tab-active' : ''}`} onClick={() => setTab('games')}><Gamepad2 size={15} /><span>Games Arcade</span></button>
           </nav> : <div className="private-space-label"><Users size={14} /> Your private space</div>}
           <div className="topbar-actions">
+            <span className="partner-presence-chip" aria-live="polite"><i className={presence?.partnerOnline ? 'presence-dot presence-dot-online' : 'presence-dot'} />{presence?.partnerOnline ? 'Partner online' : 'Partner offline'}</span>
             {room ? <span className="account-seat-chip"><i className={currentSeat === 'A' ? 'avatar-her' : ''}>{currentSeat}</i><span>Seat {currentSeat}</span></span> : null}
-            <button className="sign-out-button" onClick={handleSignOut} disabled={busy} aria-label="Sign out"><LogOut size={15} /><span>Sign out</span></button>
+            <button className="sign-out-button" onClick={handleSignOut} disabled={busy} aria-label="Lock the lounge"><LockKeyhole size={15} /><span>Lock lounge</span></button>
           </div>
         </header>
 
@@ -144,7 +150,7 @@ function AuthenticatedLounge({ user, invitationToken }: { user: LoungeUser; invi
               {room.isOwner && room.members.length < 2 ? <div className="room-invite-actions"><button className="room-invite-button" onClick={handleShareInvite} disabled={busy}><Copy size={14} />{busy ? 'Preparing…' : 'Share invite'}</button>{inviteUrl ? <input className="room-invite-url" value={inviteUrl} readOnly aria-label="Private room invitation link" onFocus={(event) => event.currentTarget.select()} /> : null}</div> : null}
             </section>
             {notice ? <p className="room-notice" role="status">{notice}{inviteUrl ? <Check size={13} /> : null}</p> : null}
-            <div className="page-content">{tab === 'movies' ? <MoviesSection /> : <GamesArcade roomId={room.id} userId={user.id} playerSeat={room.currentSeat} />}</div>
+            <div className="page-content">{tab === 'movies' ? <MoviesSection roomId={room.id} userId={user.id} /> : <GamesArcade roomId={room.id} userId={user.id} playerSeat={room.currentSeat} />}</div>
             <footer className="site-footer"><span><Sparkles size={13} /> A little corner of the internet, made for two.</span><span>Made with love <Heart size={12} fill="currentColor" /></span></footer>
           </div>
           <button className={`chat-trigger lounge-chat-trigger ${chatOpen ? 'chat-trigger-active' : ''}`} onClick={() => setChatOpen((open) => !open)} aria-expanded={chatOpen} aria-controls="live-chat-drawer"><MessageCircle size={16} /><span>Live chat</span><span className="online-dot" aria-label="Chat is live" /></button>
@@ -154,7 +160,7 @@ function AuthenticatedLounge({ user, invitationToken }: { user: LoungeUser; invi
             <span className="room-entry-icon"><Heart fill="currentColor" /></span>
             <p className="eyebrow">A TWO-SEAT ROOM</p>
             <h1>{invitationToken ? 'You have a little invitation.' : 'Make this space yours.'}</h1>
-            <p className="room-entry-copy">{invitationToken ? 'Sign in with your own account, then claim the open seat.' : 'Create a private room, choose your seat, and invite the other person with a one-use link.'}</p>
+            <p className="room-entry-copy">{invitationToken ? 'Unlock with the other passcode, then claim the open seat.' : 'Create a private room, choose your seat, and invite the other person with a one-use link.'}</p>
             {invitationToken ? <button className="gate-submit room-join-button" onClick={handleJoinRoom} disabled={busy}><span>{busy ? 'Joining…' : 'Accept invitation'}</span><Users size={15} /></button> : null}
             <div className="seat-picker" role="group" aria-label="Choose your room seat">
               <button className={selectedSeat === 'Z' ? 'seat-picker-selected' : ''} onClick={() => setSelectedSeat('Z')}><i>Z</i><span>Seat Z</span>{selectedSeat === 'Z' ? <Check size={14} /> : null}</button>
@@ -162,7 +168,7 @@ function AuthenticatedLounge({ user, invitationToken }: { user: LoungeUser; invi
             </div>
             <button className="room-create-button" onClick={handleCreateRoom} disabled={busy}><span>{busy ? 'Setting things up…' : 'Create a private room'}</span><Copy size={15} /></button>
             {notice ? <p className="account-error" role="alert">{notice}</p> : null}
-            <p className="room-entry-footnote"><LockKeyhole size={12} /> Each person signs in with their own account.</p>
+            <p className="room-entry-footnote"><LockKeyhole size={12} /> One passcode per person. Two seats, maximum.</p>
           </section>
           {error ? <p className="room-notice" role="alert">Your room could not be loaded. Refresh the page to try again.</p> : null}
           <footer className="site-footer"><span><Sparkles size={13} /> A little corner of the internet, made for two.</span><span>Made with love <Heart size={12} fill="currentColor" /></span></footer>

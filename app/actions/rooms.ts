@@ -64,7 +64,7 @@ export async function joinRoom(token: string) {
       .limit(1)
 
     if (!room || room.inviteExpiresAt.getTime() <= Date.now()) throw new Error('That invitation has expired or is no longer available.')
-    if (room.createdByUserId === userId) throw new Error('Use a second account to join your invitation.')
+    if (room.createdByUserId === userId) throw new Error('Unlock with the other passcode to join your invitation.')
 
     const [existingMember] = await tx
       .select({ roomId: loungeRoomMembers.roomId })
