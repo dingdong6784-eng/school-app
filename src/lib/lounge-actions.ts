@@ -85,7 +85,9 @@ export function getLoungeMediaState(roomId: string) {
   return callLounge<LoungeMediaState>('getMedia', { roomId })
 }
 
-export function updateLoungeMediaState(roomId: string, patch: Partial<LoungeMediaState>) {
+export type MediaPatch = Partial<LoungeMediaState> & { pingSeconds?: number }
+
+export function updateLoungeMediaState(roomId: string, patch: MediaPatch) {
   return callLounge<LoungeMediaState>('updateMedia', { roomId, patch })
 }
 

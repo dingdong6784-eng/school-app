@@ -2,7 +2,7 @@ import { useState } from 'react'
 import useSWR from 'swr'
 import { Check, Copy, Film, Gamepad2, Heart, LoaderCircle, LockKeyhole, MessageCircle, Sparkles, Users } from 'lucide-react'
 import { GamesArcade } from '@/components/games-arcade'
-import { LiveChatDrawer } from '@/components/live-chat'
+import { LiveChatSidebar } from '@/components/live-chat'
 import { MoviesSection } from '@/components/movies-section'
 import { createRoom, getMyRoom, getPartnerPresence, joinRoom, lockLounge, rotateRoomInvite, type LoungeUser, type RoomSnapshot } from '@/lib/lounge-actions'
 import { otherSeat, type PlayerSeat } from '@/lib/arcade-types'
@@ -26,7 +26,7 @@ export function LoungeApp({ user, invitationToken, onLocked }: { user: LoungeUse
   const [notice, setNotice] = useState('')
   const [activeInviteToken, setActiveInviteToken] = useState('')
   const [inviteUrl, setInviteUrl] = useState('')
-  const [chatOpen, setChatOpen] = useState(false)
+  const [chatOpen, setChatOpen] = useState(true)
 
   async function handleCreateRoom() {
     setBusy(true)
@@ -139,11 +139,12 @@ export function LoungeApp({ user, invitationToken, onLocked }: { user: LoungeUse
               {room.isOwner && room.members.length < 2 ? <div className="room-invite-actions"><button className="room-invite-button" onClick={handleShareInvite} disabled={busy}><Copy size={14} />{busy ? 'Preparing…' : 'Share invite'}</button>{inviteUrl ? <input className="room-invite-url" value={inviteUrl} readOnly aria-label="Private room invitation link" onFocus={(event) => event.currentTarget.select()} /> : null}</div> : null}
             </section>
             {notice ? <p className="room-notice" role="status">{notice}{inviteUrl ? <Check size={13} /> : null}</p> : null}
-            <div className="page-content">{tab === 'movies' ? <MoviesSection roomId={room.id} userId={user.id} /> : <GamesArcade roomId={room.id} userId={user.id} playerSeat={room.currentSeat} />}</div>
+            <div className="watch-layout">
+              <div className="watch-main">{tab === 'movies' ? <MoviesSection roomId={room.id} userId={user.id} /> : <GamesArcade roomId={room.id} userId={user.id} playerSeat={room.currentSeat} />}</div>
+              <LiveChatSidebar open={chatOpen} onOpen={() => setChatOpen(true)} onClose={() => setChatOpen(false)} roomId={room.id} userId={user.id} currentAuthor={currentAuthor} />
+            </div>
             <footer className="site-footer"><span><Sparkles size={13} /> A little corner of the internet, made for two.</span><span>Made with love <Heart size={12} fill="currentColor" /></span></footer>
           </div>
-          <button className={`chat-trigger lounge-chat-trigger ${chatOpen ? 'chat-trigger-active' : ''}`} onClick={() => setChatOpen((open) => !open)} aria-expanded={chatOpen} aria-controls="live-chat-drawer"><MessageCircle size={16} /><span>Live chat</span><span className="online-dot" aria-label="Chat is live" /></button>
-          <LiveChatDrawer open={chatOpen} onClose={() => setChatOpen(false)} roomId={room.id} userId={user.id} currentAuthor={currentAuthor} />
         </> : <div className="page-frame room-entry-frame">
           <section className="room-entry-card">
             <span className="room-entry-icon"><Heart fill="currentColor" /></span>

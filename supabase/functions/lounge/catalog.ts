@@ -109,6 +109,14 @@ export async function fetchCatalog(query: string, category: string, safeMode: bo
         ...(movies.results ?? []).map((item) => ({ ...item, media_type: "movie" as const })),
         ...(shows.results ?? []).map((item) => ({ ...item, media_type: "tv" as const })),
       ].slice(0, 20);
+    } else if (category === "kdrama") {
+      const result = await tmdbFetch<TmdbResponse>("/discover/tv", {
+        with_original_language: "ko",
+        sort_by: "popularity.desc",
+        include_adult: "false",
+        page: "1",
+      }, apiKey);
+      rawItems = (result.results ?? []).map((item) => ({ ...item, media_type: "tv" as const })).slice(0, 20);
     } else {
       const discoverParams: Record<string, string> = {
         with_genres: discoverGenres[category],

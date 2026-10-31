@@ -59,7 +59,7 @@ async function dispatch(body: Record<string, unknown>, clientAddress: string) {
       const query = typeof body.query === "string" ? body.query.trim() : "";
       const category = typeof body.category === "string" ? body.category : "all";
       if (query.length > 80) throw new LoungeError(400, "Search is limited to 80 characters.");
-      if (!["all", "romcom", "action", "horror", "family"].includes(category)) {
+      if (!["all", "romcom", "action", "horror", "family", "kdrama"].includes(category)) {
         throw new LoungeError(400, "Choose a valid movie category.");
       }
       return fetchCatalog(query, category, body.safe !== false);

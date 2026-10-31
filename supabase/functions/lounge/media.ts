@@ -2,7 +2,7 @@ import { supabase, unwrap } from "./db.ts";
 import { LoungeError } from "./errors.ts";
 import { userIdForRole, type LoungeRole } from "./access.ts";
 import { requireMembership } from "./rooms.ts";
-import { defaultLoungeMediaState, type CatalogMovie, type LoungeMediaState } from "./types.ts";
+import { defaultLoungeMediaState, embedServerCount, type CatalogMovie, type LoungeMediaState, type SyncPing } from "./types.ts";
 
 const mediaStateId = "watch-party-media";
 
@@ -57,7 +57,7 @@ function normalizeSelectedMovie(value: unknown): CatalogMovie | null | undefined
   };
 }
 
-function validatePatch(patch: unknown): Partial<LoungeMediaState> {
+function validatePatch(patch: unknown, userId: string): Partial<LoungeMediaState> {
   if (!patch || typeof patch !== "object" || Array.isArray(patch)) throw new LoungeError(400, "That player update is not valid.");
   const input = patch as Record<string, unknown>;
   const result: Partial<LoungeMediaState> = {};
@@ -89,8 +89,43 @@ function validatePatch(patch: unknown): Partial<LoungeMediaState> {
     if (typeof input.syncEnabled !== "boolean") throw new LoungeError(400, "That sync setting is not valid.");
     result.syncEnabled = input.syncEnabled;
   }
+  if ("embedServer" in input) {
+    if (!Number.isInteger(input.embedServer) || (input.embedServer as number) < 0 || (input.embedServer as number) >= embedServerCount) {
+      throw new LoungeError(400, "Choose one of the available servers.");
+    }
+    result.embedServer = input.embedServer as number;
+  }
+  if ("season" in input) {
+    if (!Number.isInteger(input.season) || (input.season as number) < 1 || (input.season as number) > 999) throw new LoungeError(400, "That season is not valid.");
+    result.season = input.season as number;
+  }
+  if ("episode" in input) {
+    if (!Number.isInteger(input.episode) || (input.episode as number) < 1 || (input.episode as number) > 999) throw new LoungeError(400, "That episode is not valid.");
+    result.episode = input.episode as number;
+  }
+  if ("pingSeconds" in input) {
+    if (typeof input.pingSeconds !== "number" || !Number.isFinite(input.pingSeconds) || input.pingSeconds < 0 || input.pingSeconds > 86_400) {
+      throw new LoungeError(400, "That playback position is not valid.");
+    }
+    result.ping = { seconds: input.pingSeconds, at: new Date().toISOString(), byUserId: userId };
+  }
   if (Object.keys(result).length === 0) throw new LoungeError(400, "That player update is empty.");
   return result;
+}
+
+function normalizeEmbedServer(value: unknown) {
+  return Number.isInteger(value) && (value as number) >= 0 && (value as number) < embedServerCount ? (value as number) : 0;
+}
+
+function normalizeEpisodeNumber(value: unknown) {
+  return Number.isInteger(value) && (value as number) >= 1 && (value as number) <= 999 ? (value as number) : 1;
+}
+
+function normalizePing(value: unknown): SyncPing | null {
+  if (!value || typeof value !== "object") return null;
+  const ping = value as Partial<SyncPing>;
+  if (typeof ping.seconds !== "number" || !Number.isFinite(ping.seconds) || typeof ping.at !== "string" || typeof ping.byUserId !== "string") return null;
+  return { seconds: Math.max(0, Math.min(86_400, ping.seconds)), at: ping.at, byUserId: ping.byUserId };
 }
 
 function fromStoredState(value: unknown, version: number, updatedAt: string | null): LoungeMediaState {
@@ -102,6 +137,10 @@ function fromStoredState(value: unknown, version: number, updatedAt: string | nu
     streamUrl: typeof stored.streamUrl === "string" ? normalizeStreamUrl(stored.streamUrl) ?? "" : "",
     currentTime: typeof stored.currentTime === "number" && Number.isFinite(stored.currentTime) ? Math.max(0, Math.min(86_400, stored.currentTime)) : 0,
     isPlaying: stored.isPlaying === true,
+    embedServer: normalizeEmbedServer(stored.embedServer),
+    season: normalizeEpisodeNumber(stored.season),
+    episode: normalizeEpisodeNumber(stored.episode),
+    ping: normalizePing(stored.ping),
     syncEnabled: stored.syncEnabled !== false,
     updatedByUserId: typeof stored.updatedByUserId === "string" ? stored.updatedByUserId : null,
     version,
@@ -124,7 +163,7 @@ export async function getMediaState(role: LoungeRole, roomId: unknown) {
 
 export async function updateMediaState(role: LoungeRole, roomId: unknown, patch: unknown) {
   const membership = await requireMembership(role, roomId);
-  const safePatch = { ...validatePatch(patch), updatedByUserId: userIdForRole(role) };
+  const safePatch = { ...validatePatch(patch, userIdForRole(role)), updatedByUserId: userIdForRole(role) };
   const current = unwrap(
     await supabase
       .from("lounge_game_states")

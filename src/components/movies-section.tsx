@@ -1,18 +1,19 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react'
 import useSWR from 'swr'
 import { ArrowDown, ArrowRight, Check, Clapperboard, Clock3, ExternalLink, Heart, Info, Link2, LoaderCircle, Play, Plus, Search, ShieldCheck, Sparkles, Volume2, VolumeX } from 'lucide-react'
-import { getCatalog, getLoungeMediaState, updateLoungeMediaState, type CatalogResponse } from '@/lib/lounge-actions'
+import { getCatalog, getLoungeMediaState, updateLoungeMediaState, type CatalogResponse, type MediaPatch } from '@/lib/lounge-actions'
 import { YouTubePlayer } from '@/components/youtube-player'
-import type { CatalogMovie, LoungeMediaState } from '@/lib/watch-party-types'
+import { defaultLoungeMediaState, type CatalogMovie, type LoungeMediaState } from '@/lib/watch-party-types'
 
-type CategoryFilter = 'All picks' | 'Romantic Comedies' | 'Trending Action' | 'Cozy Horror' | 'Family Favorites' | 'Custom URL Stream'
-const categories: CategoryFilter[] = ['All picks', 'Romantic Comedies', 'Trending Action', 'Cozy Horror', 'Family Favorites', 'Custom URL Stream']
+type CategoryFilter = 'All picks' | 'Romantic Comedies' | 'Trending Action' | 'Cozy Horror' | 'Family Favorites' | 'K-Dramas' | 'Custom URL Stream'
+const categories: CategoryFilter[] = ['All picks', 'Romantic Comedies', 'Trending Action', 'Cozy Horror', 'Family Favorites', 'K-Dramas', 'Custom URL Stream']
 const categoryApiKeys: Record<Exclude<CategoryFilter, 'Custom URL Stream'>, string> = {
   'All picks': 'all',
   'Romantic Comedies': 'romcom',
   'Trending Action': 'action',
   'Cozy Horror': 'horror',
   'Family Favorites': 'family',
+  'K-Dramas': 'kdrama',
 }
 
 function getYouTubeVideoId(value: string) {
@@ -26,6 +27,21 @@ function getYouTubeVideoId(value: string) {
   } catch {
     return null
   }
+}
+
+const embedServers = [
+  { label: 'Server 1 · vidsrc.to', base: 'https://vidsrc.to/embed' },
+  { label: 'Server 2 · vidsrc.pro', base: 'https://vidsrc.pro/embed' },
+  { label: 'Server 3 · 2embed', base: 'https://2embed.cc/embed' },
+]
+
+function buildEmbedUrl(movie: CatalogMovie, server: number, season: number, episode: number) {
+  const base = embedServers[server]?.base ?? embedServers[0].base
+  return movie.mediaType === 'movie' ? `${base}/movie/${movie.id}` : `${base}/tv/${movie.id}/${season}/${episode}`
+}
+
+function formatTimestamp(seconds: number) {
+  return `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`
 }
 
 function isDirectVideo(value: string) {
@@ -107,8 +123,11 @@ export function MoviesSection({ roomId, userId }: { roomId: string; userId: stri
   const youtubeVideoId = getYouTubeVideoId(streamUrl)
   const supportsSync = directVideo || Boolean(youtubeVideoId)
   const savedMovieId = selectedMovie ? `${selectedMovie.mediaType}:${selectedMovie.id}` : ''
+  const embedServer = mediaState?.embedServer ?? 0
+  const embedUrl = selectedMovie && !streamUrl ? buildEmbedUrl(selectedMovie, embedServer, mediaState?.season ?? 1, mediaState?.episode ?? 1) : ''
+  const partnerPing = mediaState?.ping && mediaState.ping.byUserId !== userId && Date.now() - Date.parse(mediaState.ping.at) < 120_000 ? mediaState.ping : null
 
-  async function updateSharedMedia(patch: Partial<LoungeMediaState>) {
+  async function updateSharedMedia(patch: MediaPatch) {
     const updated = await updateLoungeMediaState(roomId, patch)
     await mutateMediaState(updated, false)
     return updated
@@ -116,7 +135,7 @@ export function MoviesSection({ roomId, userId }: { roomId: string; userId: stri
 
   async function selectMovie(movie: CatalogMovie) {
     try {
-      await updateSharedMedia({ selected: movie })
+      await updateSharedMedia({ selected: movie, streamUrl: '' })
       document.getElementById('featured-player')?.scrollIntoView({ behavior: 'smooth', block: 'center' })
     } catch {
       setStreamError('That title could not be shared. Refresh the lounge and try again.')
@@ -149,6 +168,35 @@ export function MoviesSection({ roomId, userId }: { roomId: string; userId: stri
     } catch {
       setStreamError('The sync setting could not be changed.')
     }
+  }
+
+  async function sendSyncPing() {
+    const seconds = videoRef.current?.currentTime ?? mediaState?.currentTime ?? 0
+    try {
+      await updateSharedMedia({ pingSeconds: seconds })
+    } catch {
+      setStreamError('The sync ping could not be sent. Check your connection and try again.')
+    }
+  }
+
+  async function chooseServer(server: number) {
+    try {
+      await updateSharedMedia({ embedServer: server })
+    } catch {
+      setStreamError('That server could not be selected. Try again in a moment.')
+    }
+  }
+
+  async function chooseEpisode(patch: { season: number } | { episode: number }) {
+    try {
+      await updateSharedMedia(patch)
+    } catch {
+      setStreamError('That episode could not be selected. Try again in a moment.')
+    }
+  }
+
+  function jumpToPing(seconds: number) {
+    if (videoRef.current) videoRef.current.currentTime = seconds
   }
 
   async function toggleWatchlist(movie: CatalogMovie) {
@@ -215,7 +263,18 @@ export function MoviesSection({ roomId, userId }: { roomId: string; userId: stri
 
       <section className="player-section" id="featured-player">
         <div className="section-label-row"><div><p className="eyebrow">FEATURED WATCH PARTY</p><h2>{selectedMovie?.title || 'Your screen, together'}</h2></div><span className="player-status"><span /> {streamUrl ? 'Shared stream ready' : 'Waiting for a link'}</span></div>
-        <div className={`player-frame ${streamUrl ? 'player-frame-active' : ''}`}>
+        {selectedMovie && !streamUrl ? (
+          <div className="server-switch-row">
+            <label className="server-switch"><span>Switch server</span><select value={embedServer} onChange={(event) => void chooseServer(Number(event.target.value))}>{embedServers.map((server, index) => <option key={server.label} value={index}>{server.label}</option>)}</select></label>
+            {selectedMovie.mediaType === 'tv' ? (
+              <>
+                <label className="server-switch"><span>Season</span><select value={mediaState?.season ?? 1} onChange={(event) => void chooseEpisode({ season: Number(event.target.value) })}>{Array.from({ length: 30 }, (_, index) => <option key={index + 1} value={index + 1}>{index + 1}</option>)}</select></label>
+                <label className="server-switch"><span>Episode</span><select value={mediaState?.episode ?? 1} onChange={(event) => void chooseEpisode({ episode: Number(event.target.value) })}>{Array.from({ length: 50 }, (_, index) => <option key={index + 1} value={index + 1}>{index + 1}</option>)}</select></label>
+              </>
+            ) : null}
+          </div>
+        ) : null}
+        <div className={`player-frame ${streamUrl || embedUrl ? 'player-frame-active' : ''}`}>
           {directVideo ? (
             <video
               className="player-content"
@@ -233,14 +292,14 @@ export function MoviesSection({ roomId, userId }: { roomId: string; userId: stri
             <YouTubePlayer
               key={youtubeVideoId}
               videoId={youtubeVideoId}
-              state={mediaState ?? { selected: null, streamUrl: '', currentTime: 0, isPlaying: false, syncEnabled: true, updatedByUserId: null, version: 0, updatedAt: null }}
+              state={mediaState ?? defaultLoungeMediaState}
               syncEnabled={syncEnabled}
               userId={userId}
               muted={muted}
               onPlayback={publishPlayback}
             />
-          ) : streamUrl ? (
-            <iframe className="player-content" src={streamUrl} title={`Watch ${selectedMovie?.title || 'together'}`} allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowFullScreen referrerPolicy="strict-origin-when-cross-origin" sandbox="allow-scripts allow-same-origin allow-presentation allow-forms" />
+          ) : streamUrl || embedUrl ? (
+            <iframe className="player-content" src={streamUrl || embedUrl} title={`Watch ${selectedMovie?.title || 'together'}`} allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowFullScreen referrerPolicy="strict-origin-when-cross-origin" sandbox="allow-scripts allow-same-origin allow-presentation allow-forms" />
           ) : (
             <div className="player-empty">
               <div className="player-play-mark"><Play size={19} fill="currentColor" /></div>
@@ -250,6 +309,7 @@ export function MoviesSection({ roomId, userId }: { roomId: string; userId: stri
           )}
           <div className="player-corner-label"><Clapperboard size={13} /> OUR SCREEN</div>
         </div>
+        {partnerPing ? <p className="ping-notice" role="status"><Clock3 size={13} /> Your partner pinged {formatTimestamp(partnerPing.seconds)}.{directVideo ? <button type="button" onClick={() => jumpToPing(partnerPing.seconds)}>Jump there</button> : null}</p> : null}
         <div className="player-controls">
           <div className="player-controls-left">
             <button className={`sync-toggle ${syncEnabled ? 'sync-toggle-on' : ''}`} onClick={toggleSync} aria-pressed={syncEnabled} disabled={!supportsSync && Boolean(streamUrl)}><span className="sync-dot" /> {syncEnabled && supportsSync ? 'Watch together sync on' : supportsSync ? 'Sync paused' : streamUrl ? 'Source shared · controls local' : 'Sync ready for YouTube or video'}</button>
@@ -257,15 +317,16 @@ export function MoviesSection({ roomId, userId }: { roomId: string; userId: stri
             <span className="player-control-note"><Clock3 size={14} /> {mediaState?.isPlaying ? 'Playing together' : streamUrl ? 'Waiting for play' : 'Waiting for a stream'}</span>
           </div>
           <div className="player-controls-right">
+            <button className="sync-ping-button" type="button" onClick={() => void sendSyncPing()} disabled={!selectedMovie && !streamUrl}><Clock3 size={14} /> Sync ping</button>
             <button className="icon-control" onClick={() => setMuted((value) => !value)} aria-label={supportsSync ? muted ? 'Unmute video' : 'Mute video' : 'Volume control is unavailable for this player'} disabled={!supportsSync}>{muted ? <VolumeX size={15} /> : <Volume2 size={15} />}</button>
             <span className="player-control-note">{mediaState?.currentTime ? `${Math.floor(mediaState.currentTime / 60)}:${String(Math.floor(mediaState.currentTime % 60)).padStart(2, '0')}` : '00:00'}</span>
           </div>
         </div>
-        <form className="stream-form" onSubmit={submitStream}>
+        {category === 'Custom URL Stream' ? <form className="stream-form" onSubmit={submitStream}>
           <div className="stream-input-wrap"><Link2 size={15} /><input aria-label="Video or embed URL" placeholder="Paste a YouTube, Vimeo, or authorized video URL" value={streamInput} onChange={(event) => setStreamInput(event.target.value)} /><button className="stream-submit" type="submit"><span>Share stream</span><ArrowRight size={14} /></button></div>
           {streamError ? <p className="inline-error" role="alert">{streamError}</p> : null}
           {streamUrl ? <p className="stream-note"><Info size={13} /> Shared with both seats. Use a service or video file you have permission to watch; only YouTube, Vimeo, and secure video files are supported.</p> : null}
-        </form>
+        </form> : null}
       </section>
 
       <section className="browse-section">

@@ -7,7 +7,7 @@ import { listLoungeMessages, reactToLoungeMessage, sendLoungeMessage, type Loung
 type ChatMessage = LoungeMessage
 const reactions: LoungeReaction[] = ['❤️', '🍿', '🎮', '😮', '😂']
 
-export function LiveChatDrawer({ open, onClose, roomId, userId, currentAuthor }: { open: boolean; onClose: () => void; roomId: string; userId: string; currentAuthor: LoungeAuthor }) {
+export function LiveChatSidebar({ open, onOpen, onClose, roomId, userId, currentAuthor }: { open: boolean; onOpen: () => void; onClose: () => void; roomId: string; userId: string; currentAuthor: LoungeAuthor }) {
   const { mutate } = useSWRConfig()
   const chatKey = ['room-chat', userId, roomId]
   const { data, error, isLoading } = useSWR(open ? chatKey : null, () => listLoungeMessages(roomId), {
@@ -74,11 +74,16 @@ export function LiveChatDrawer({ open, onClose, roomId, userId, currentAuthor }:
     event.target.value = ''
   }
 
-  if (!open) return null
+  if (!open) {
+    return (
+      <aside className="chat-sidebar chat-sidebar-collapsed">
+        <button className="chat-expand" onClick={onOpen} aria-expanded={false} aria-controls="live-chat-sidebar" aria-label="Open live chat"><MessageCircle size={16} /><span>Live chat</span></button>
+      </aside>
+    )
+  }
 
   return (
-    <div className="chat-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}>
-      <aside className="chat-drawer" id="live-chat-drawer" role="dialog" aria-modal="true" aria-labelledby="chat-title">
+    <aside className="chat-sidebar" id="live-chat-sidebar" aria-labelledby="chat-title">
         <header className="chat-header">
           <div className="chat-header-title"><span className="chat-header-icon"><MessageCircle size={16} /></span><div><p className="eyebrow">YOUR PRIVATE ROOM</p><h2 id="chat-title">Little live chat</h2></div></div>
           <div className="chat-header-actions"><span className="chat-online"><i /> Here together</span><button className="chat-close" onClick={onClose} aria-label="Close live chat"><X size={17} /></button></div>
@@ -121,7 +126,6 @@ export function LiveChatDrawer({ open, onClose, roomId, userId, currentAuthor }:
           </form>
           <p className="chat-endnote"><Check size={11} /> Messages refresh across your accounts.</p>
         </div>
-      </aside>
-    </div>
+    </aside>
   )
 }
